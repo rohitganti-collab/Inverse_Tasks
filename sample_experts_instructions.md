@@ -32,21 +32,9 @@ Your tool is the forward computation. The task wraps it in a budgeted "black box
 | Leakage | Prompt *and* tool outputs never name the trap or method |
 | Budget | Excludes brute force; shortcut and intended path both fit |
 
-## AI Use Policy
-
-| You own | Claude does |
-|---|---|
-| The hidden answer + uniqueness argument | Oracle implementation |
-| The near-miss taxonomy | Intended + shortcut solver code |
-| The trap (why the shortcut is tempting) | Verifier script (you validate it against your ground truth) |
-| The solver-facing prompt, written yourself | — |
-
-## Common ways tasks get rejected
 
 - Pass rate is 0/32 (impossible) or ≥25/32 (too easy) — not in the training band
 - The trap is named or hinted anywhere the solver can see, including tool diagnostics
 - Budget is loose enough that brute force or trial-and-error works
 - The "shortcut" isn't actually tempting — no one would really make that mistake
 - Tolerance is wide enough that the near-miss answer also passes
-
-**When in doubt:** if a smart colleague reading only the prompt would fall into your trap roughly a third of the time, you've got it right.
