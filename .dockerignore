@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.pyc
+
+# Authoring/calibration artifacts — never bake these into the image, they
+# name the intended solver and the trap the task is testing for.
+problems/*/BRIEF.md
+problems/*/STATE.md
+problems/*/reasoning_trap.md
+problems/*/solution/
+sample_experts_instructions.md
