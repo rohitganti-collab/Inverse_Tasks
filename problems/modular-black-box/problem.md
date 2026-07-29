@@ -12,9 +12,9 @@ modulus.
 
 # What you can use
 
-You have access to a hidden `query(mode, **params)` function on the oracle.
-Call `query("help")` to discover available modes and your remaining query budget.
-You may call budgeted modes at most **6** times in total.
+You have access to `query_oracle(mode, parameters)`. Call
+`query_oracle(mode="help", parameters={})` to discover available modes and your
+remaining budget.
 
 # Your task
 
@@ -24,3 +24,5 @@ Recover the hidden pair `(a, b)`.
 
 Submit a JSON array of two integers, in this order: `a`, then `b`.
 Exact integers — no tolerance.
+
+Submit your answer via `submit_answer(answer)`.

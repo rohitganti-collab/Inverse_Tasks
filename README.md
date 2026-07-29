@@ -1,58 +1,73 @@
-# Inverse Tasks — gym problem pack
+# Inverse_Tasks
 
-Minimal problem surface for packaging into **core_gym**.
+Generic **inverse-task** runtime for Taiga: one Docker/MCP image, many problem
+folders. The model probes a hidden system only through
+`query_oracle(mode, parameters)`, then submits an answer graded against a
+golden key.
 
-This branch deliberately excludes Taiga MCP hooks (`setup_problem` /
-`grade_problem`), Docker runtime, expert calibration notes, and reference
-solvers. The gym owns setup and grading; each problem only ships its oracle
-runtime surface.
+Experts add science by dropping a folder under `problems/` — **no MCP or Docker
+changes per task**.
 
-## Layout
+## Architecture
 
 ```
-problems/
-  <problem-id>/
-    problem.md           # task prompt shown to the model
-    oracle/setup.py      # hidden Oracle with stable query(...) contract
-    golden/expected.json # { "answer": ..., "tolerance": N }
+Taiga harness
+  └─ Docker image (this repo)
+       ├─ mcp_server/          generic engine (oracle-agnostic)
+       │    setup_problem      # harness-only: load oracle, return prompt
+       │    grade_problem      # harness-only: score vs golden
+       │    query_oracle       # model-facing probe
+       │    describe_oracle    # model-facing: modes + budget
+       │    submit_answer      # model-facing: final JSON answer
+       └─ problems/<id>/       drop-in tasks
+            problem.md         # task prompt (or use Taiga Task Prompt field)
+            oracle/setup.py    # hidden Oracle / query_oracle
+            golden/expected.json
 ```
 
-Drop additional problem folders beside `modular-black-box` using the same
-three-file contract.
+The harness owns the agent loop. This image owns the instrument + verifier.
+`setup_problem` / `grade_problem` are hidden from the model automatically.
 
-## Included sample
+## Per-problem contract
 
-| Problem ID | Domain | Extra Python deps |
-| --- | --- | --- |
-| `modular-black-box` | modular arithmetic inverse | **none** (stdlib only) |
-
-## Oracle contract
-
-```python
-from oracle.setup import Oracle
-
-oracle = Oracle()                 # fresh instance per attempt
-oracle.query("help")              # free; lists modes + budget
-oracle.query("evaluate", x=0)     # budgeted observation
+```bash
+cp -r problems/_template problems/my-problem-id
 ```
 
-- Hidden ground truth lives only inside `oracle/setup.py`.
-- `query(mode, **params)` is the stable probe API.
-- Budget is enforced inside the Oracle (sample: 6 evaluate calls).
-- Returns observations only — never judgments or the hidden parameters.
+| File | Role |
+| --- | --- |
+| `problem.md` | Prompt (optional if Task Prompt is set in Taiga) |
+| `oracle/setup.py` | Hidden system. Prefer `class Oracle` + `ACTIONS`, or module-level `query_oracle(mode, parameters)` |
+| `golden/expected.json` | `{ "answer": ..., "tolerance": N }` |
+| `solution/` | Local calibration only — **never** mount on Taiga |
 
-## Golden answer
+Sample: `problems/modular-black-box/`.
 
-```json
-{ "answer": [23, 58], "tolerance": 0 }
+## Model-facing tools
+
+| Tool | Purpose |
+| --- | --- |
+| `query_oracle(mode, parameters)` | Probe the hidden system |
+| `describe_oracle()` | Modes + budget remaining (free) |
+| `submit_answer(answer)` | Final JSON answer |
+
+## Taiga form (critical)
+
+| Field | Value |
+| --- | --- |
+| **Docker Image** | published inverse-tasks image |
+| **Startup Command** | `python -u /app/mcp_server/server.py` |
+| **Tools** | **empty** (no bash / str_replace_editor) |
+| **Grading Strategy** | **`mcp`** |
+| **Preloaded Files** | mount `oracle/` + `golden/` at `/mnt/problems/<id>/` |
+| **Tell model about uploaded files** | **OFF** |
+
+Details: [docs/EXPERT_WORKFLOW.md](docs/EXPERT_WORKFLOW.md).
+
+## Build / test
+
+```bash
+python3 -m unittest discover -s tests
+python3 tools/validate_problem.py modular-black-box
+docker build -t inverse-tasks:local .
 ```
-
-`tolerance` is absolute per numeric element (`0` = exact match).
-
-## Specialized libraries
-
-Current sample needs **no packages beyond the Python stdlib**.
-
-If later problems need libraries beyond `numpy` / `scipy`, list them here
-(or in a short note next to that problem folder) so they can be added to the
-gym image.
