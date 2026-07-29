@@ -1,158 +1,59 @@
 # Inverse_Tasks
 
-A Taiga RL environment for **inverse tasks**: a model is given a black-box
-oracle it can only probe through a tight budget of tool calls, and must recover
-the hidden cause (constants, parameters, a mechanism) that explains what it
-observes. Each task is built so that a competent solver can fail in one
-specific, predictable way — see `sample_experts_instructions.md` for the
-authoring method.
+A Taiga RL environment for **inverse tasks**: the model probes a hidden system
+only through `query_oracle(mode, parameters)` under a tight budget, then
+submits an answer graded against a golden key.
 
-The container is **oracle-agnostic**. Experts write the prompt, the oracle, the
-solvers and the answer key; the engine reads whatever their oracle declares and
-publishes exactly that to the model. Adding a task is adding a folder — no
-server or Docker changes.
+The Docker image is **generic**. Experts write the oracle, golden answer, and
+(optionally) Task Prompt; the engine loads whatever their oracle declares and
+publishes exactly that. No server changes per task.
 
-Experts never build the image. It is published once, then each new task is a
-folder they upload as Preloaded Files:
+## How secrets stay hidden on Taiga
+
+1. The MCP server and problem data are **root-owned and owner-only**.
+2. Taiga runs model-side tools as uid/gid `1000:1000`.
+3. **Tools is empty by default**; add a filesystem tool only when the task
+   genuinely needs it.
+4. **Preloaded Files** mount only the runtime subset (never `solution/`).
+5. **Tell model about uploaded files: OFF**.
+6. **Grading Strategy: `mcp`** — not Agentic Grader / Rubric.
+
+At setup, writable preloaded problem trees are changed to owner-only
+permissions. Their contents are never overwritten, so a Taiga MCP-process
+restart can reload the oracle and golden answer before grading.
+
+See **[docs/EXPERT_WORKFLOW.md](docs/EXPERT_WORKFLOW.md)** for the exact form
+fill-in matching the Create Problem UI.
 
 ```bash
-cp -r problems/_template problems/my-problem-id   # 1. write 4 files
-python3 tools/validate_problem.py my-problem-id   # 2. validate + print form values
-# 3. upload the folder to /mnt/problems/my-problem-id/ and fill in 5 form fields
+cp -r problems/_template problems/my-problem-id
+python3 tools/validate_problem.py my-problem-id
 ```
-
-- **[docs/EXPERT_WORKFLOW.md](docs/EXPERT_WORKFLOW.md)** — start here: what to
-  write, and exactly what to put in Taiga's Create Problem form.
-- **[docs/AUTHORING.md](docs/AUTHORING.md)** — the full engineering contract.
-
-> Two Create Problem defaults will silently ruin an inverse task: the **Tools**
-> field arrives pre-filled with `bash`, which lets the model read the oracle and
-> the answer key off disk, and **Grading Strategy** defaults to
-> `Rubric (Itemwise)`, which ignores `golden/expected.json` in favour of an LLM
-> judge. Clear the first, set the second to `mcp`.
 
 ## Layout
 
 ```
-Dockerfile                      generic runtime; ships every problem below
-requirements.txt                mcp, pydantic
-mcp_server/
-  core.py                       the engine — oracle loading, action
-                                normalisation, budget, grading. Stdlib only.
-  server.py                     thin MCP layer: decides which tools the model sees
-docker/collect_problems.py      allowlists each problem's runtime files into the image
-tools/validate_problem.py       pre-flight checks for an authored problem
-tests/                          engine + server suites, no third-party deps needed
+Dockerfile                 generic MCP runtime (oracle-agnostic)
+mcp_server/                engine + tools (query_oracle, submit_answer, …)
 problems/
-  _template/                    copy this to start a task (never served)
-  modular-black-box/            the sample task
+  _template/               copy this to start a task
+  modular-black-box/       sample teaching fixture
 ```
 
-Per problem, only `problem.md`, `config.yaml`, `oracle/`, `golden/expected.json`
-and `grader/*.py` enter the image. The intended solver, the trap solver, the
-near-miss table and the calibration notes stay out — by allowlist, so a new
-authoring file is excluded by default rather than shipped next to the answer key.
+## Model-facing tools
 
-## The oracle contract, in brief
+| Tool | Purpose |
+| --- | --- |
+| `query_oracle(mode, parameters)` | Probe the hidden system |
+| `describe_oracle()` | Modes + budget remaining (free) |
+| `submit_answer(answer)` | Final JSON answer |
 
-`problems/<id>/oracle/setup.py` defines a class named `Oracle`. Declare the
-probe surface and the engine turns each entry into a tool:
+`setup_problem` / `grade_problem` are harness-only (hidden from the model).
 
-```python
-class Oracle:
-    BUDGET = 6
-    ACTIONS = [
-        {"name": "evaluate",
-         "description": "Return the box's output for your chosen integer x.",
-         "params": {"x": {"type": "integer", "required": True}}},
-        {"name": "help",
-         "description": "Return a general hint.",
-         "params": {"question": {"type": "string", "default": ""}},
-         "costs_budget": False},
-    ]
-    def evaluate(self, x): ...
-    def help(self, question=""): ...
-```
-
-Undeclared oracles still work: the engine falls back to introspecting public
-methods, then to forwarding through a single `query(mode, **params)`. Declaring
-`ACTIONS` is preferred — it's what gives the model tools named the way your
-prompt names them, with validated parameters.
-
-Budget, parameter checking, answer parsing, grading, and leakage containment are
-handled once, identically for every problem.
-
-## Container interface
-
-The image runs an MCP server over stdio. Taiga's scaffold hooks are hidden from
-the model automatically; the rest is what the model can call.
-
-| Tool | Visibility | Purpose |
-| --- | --- | --- |
-| `setup_problem` | hidden | Fresh oracle for `problem_id`; returns `problem.md`. |
-| `grade_problem` | hidden | Scores the submission against `golden/expected.json`. |
-| `list_problems` | hidden | Which problem ids this image serves. |
-| `query(action, params)` | model | **The probe.** Any declared oracle action. |
-| `describe_oracle()` | model | Available actions, budget remaining, answer shape. Free. |
-| `submit_answer(answer)` | model | Final answer as JSON; resubmission allowed. |
-| *your declared actions* | model | One tool per `ACTIONS` entry — only with `--named-tools`. |
-
-`setup_problem` appends a **generated tool guide** to the prompt, built from the
-oracle's `ACTIONS`, so the calls the model is told to make are always the calls
-actually published. Experts write the science; the mechanics are generated.
-
-**Why `query` and not named tools by default.** MCP publishes its tool list
-during the initialize handshake, *before* Taiga says which problem is running, so
-per-problem tool names can only exist if the problem is fixed at startup. `query`
-needs no such assumption, and the surface stays identical no matter how many
-problems a container has mounted. `--named-tools --problem-id <id>` opts into
-named tools where that's preferred; both paths are tested and both are checked by
-`--selftest`.
-
-## Develop and test
+## Build / test
 
 ```bash
-python3 -m unittest discover -s tests    # engine + server suites (no mcp needed)
-python3 tools/validate_problem.py        # validate every authored problem
-docker build -t inverse-tasks:local .    # runs --selftest; fails on a broken build
-docker run --rm -i inverse-tasks:local   # stdio smoke test
+python3 -m unittest discover -s tests
+python3 tools/validate_problem.py
+docker build -t inverse-tasks:local .
 ```
-
-`docker build` is a real gate, not just packaging: it asserts every binary and
-path Taiga's preflight requires, then runs `server.py --selftest` against the
-genuine `mcp` package (the unit tests stub it) — enumerating the published tools
-through FastMCP and driving `setup_problem → query → submit_answer →
-grade_problem`, asserting the golden answer scores 1.0 and a wrong one 0.0, in
-both tool modes. To run that check by hand inside a container:
-
-```bash
-docker run --rm inverse-tasks:local python -u /app/mcp_server/server.py --selftest
-```
-
-To drive it with Taiga's real agent harness without pushing an image, use the
-local tunnel (see the Taiga wiki, `features/local_tunnel.md`):
-
-```bash
-taiga-local-tunnel start --dockerfile ./Dockerfile \
-  --startup-command "python -u /app/mcp_server/server.py" \
-  --problem-id modular-black-box
-```
-
-## Registering on Taiga
-
-Push the image, then create a problem pointing at it — see
-`problems-metadata.example.json`. Two settings are easy to get wrong:
-
-- **Grading strategy must be `mcp`.** The Create Problem form defaults to
-  `Rubric (Itemwise)`, which sends the transcript to an LLM judge and ignores
-  your golden answer.
-- **`startup_command` is `python -u /app/mcp_server/server.py`.** That publishes
-  `query` / `submit_answer` / `describe_oracle`; the model probes through
-  `query`. Add `--named-tools --problem-id <id>` only if you want one tool per
-  declared action instead.
-
-`required_tools` is normally empty — the model needs the oracle, not bash.
-
-To iterate without rebuilding, mount a problem folder at
-`/mnt/problems/<problem_id>/` via `preloaded_files`; that path is searched ahead
-of the baked-in problems (`INVERSE_TASKS_PROBLEM_DIRS`).

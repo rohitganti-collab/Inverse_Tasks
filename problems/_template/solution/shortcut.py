@@ -1,10 +1,10 @@
-"""TEMPLATE shortcut solver — the tempting professional error.
+"""TEMPLATE shortcut solver — the tempting wrong approach.
 
-This must produce a structurally-plausible but numerically wrong answer. The
-validator runs it and requires it to FAIL. If it passes, your trap isn't a trap.
+MUST FAIL against the oracle. If it passes, the task does not discriminate.
+Authoring / calibration only. Never mount this under Preloaded Files.
 """
 
 
 def solve(oracle):
-    y = oracle.evaluate(1)
-    return [y % 100]  # off by the input offset — plausible, wrong
+    y = oracle.query("evaluate", x=0)
+    return [y]  # replace with the naive near-miss path

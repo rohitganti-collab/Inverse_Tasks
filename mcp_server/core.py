@@ -48,6 +48,8 @@ RESERVED_ACTION_NAMES = frozenset(
         "list_problems",
         "submit_answer",
         "describe_oracle",
+        "query",
+        "query_oracle",
         "bash",
         "str_replace_editor",
         "computer",
@@ -182,13 +184,110 @@ def resolve_problem_dir(
 # Oracle loading and action normalisation
 # --------------------------------------------------------------------------- #
 
+# Custom graders are immutable within a problem run, so importing each one once
+# avoids repeated module side effects if setup_problem is called again.
+_GRADER_CACHE: dict[str, Optional[Callable]] = {}
+
+
+def _cache_key(problem_dir: Path) -> str:
+    return str(problem_dir.resolve())
+
+
+def permission_hardening_enabled() -> bool:
+    """Whether setup should make a problem tree private to its owner.
+
+    This is deliberately limited to the Taiga image runtime. Running a local
+    selftest against an authoring checkout must never mutate that checkout,
+    even if a stale environment variable happens to be present.
+    """
+    if os.environ.get("INVERSE_TASKS_RUNTIME", "").strip().lower() != "taiga":
+        return False
+    return os.environ.get("INVERSE_TASKS_HARDEN_PERMISSIONS", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def harden_problem_permissions(problem_dir: Path) -> list[str]:
+    """Make a problem tree readable only by its owner, without changing data.
+
+    Taiga starts the MCP server as root and runs model-side tools as uid/gid
+    1000. Owner-only modes therefore keep oracle, golden, and grader data away
+    from bash/editor tools while still allowing a newly started MCP process to
+    reload everything before grading.
+
+    Refusing to overwrite or unlink task files is important: Taiga is allowed
+    to restart the MCP process between setup and grade, and process-local
+    caches do not survive that restart.
+    """
+    if not permission_hardening_enabled():
+        return []
+
+    problem_dir = problem_dir.resolve()
+    if not problem_dir.is_dir():
+        raise InverseTaskError(f"Cannot protect missing problem directory {problem_dir}")
+
+    protected: list[str] = []
+    failures: list[str] = []
+    paths = [problem_dir, *sorted(problem_dir.rglob("*"))]
+    for path in paths:
+        relative = "." if path == problem_dir else str(path.relative_to(problem_dir))
+        if path.is_symlink():
+            failures.append(f"{relative} is a symlink")
+            continue
+        try:
+            stat = path.stat()
+            if os.geteuid() == 0 and (stat.st_uid != 0 or stat.st_gid != 0):
+                os.chown(path, 0, 0)
+            if path.is_dir():
+                desired_mode = 0o700
+            elif path.is_file():
+                desired_mode = 0o600
+            else:
+                continue
+            if stat.st_mode & 0o777 != desired_mode:
+                path.chmod(desired_mode)
+            protected.append(relative)
+        except OSError as exc:
+            failures.append(f"{relative}: {exc}")
+            continue
+
+    if failures and os.environ.get(
+        "INVERSE_TASKS_REQUIRE_PRIVATE_PROBLEMS", "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}:
+        detail = "; ".join(failures[:5])
+        if len(failures) > 5:
+            detail += f"; and {len(failures) - 5} more"
+        raise InverseTaskError(
+            "Could not make the problem files private to the MCP server. "
+            "Use a writable preloaded-files mount owned by the server, or keep "
+            f"model filesystem tools disabled. Details: {detail}"
+        )
+
+    return protected
+
+
+def seal_secret_files(problem_dir: Path) -> list[str]:
+    """Compatibility alias for the old, destructive hardening function.
+
+    Older integrations may still call this name. It now changes permissions
+    only; it never overwrites or deletes authoring data.
+    """
+    return harden_problem_permissions(problem_dir)
+
 
 def _load_oracle_class(problem_dir: Path):
     setup_path = problem_dir / "oracle" / "setup.py"
+
     if not setup_path.is_file():
         raise OracleContractError(f"Missing oracle at {setup_path}")
 
     module_name = f"inverse_oracle_{problem_dir.name.replace('-', '_')}"
+    # Drop a prior import so a re-uploaded oracle is picked up on the next load.
+    sys.modules.pop(module_name, None)
+
     spec = importlib.util.spec_from_file_location(module_name, setup_path)
     if spec is None or spec.loader is None:
         raise OracleContractError(f"Could not import oracle from {setup_path}")
@@ -211,12 +310,70 @@ def _load_oracle_class(problem_dir: Path):
                 pass
 
     oracle_cls = getattr(module, "Oracle", None)
-    if oracle_cls is None:
+    if oracle_cls is not None:
+        return oracle_cls
+
+    # Module-level probe functions are also supported: query_oracle(mode,
+    # parameters) or handle_query(mode, parameters). Adapt that shape so the
+    # same task folder can run on Taiga without a hand-written wrapper class.
+    query_fn = getattr(module, "query_oracle", None)
+    if not callable(query_fn):
+        query_fn = getattr(module, "handle_query", None)
+    if not callable(query_fn):
         raise OracleContractError(
-            f"{setup_path} defines no class named `Oracle`. "
-            "Every problem's oracle/setup.py must expose `class Oracle`."
+            f"{setup_path} exposes no supported oracle entry point. Define either "
+            "`class Oracle`, `query_oracle(mode, parameters)`, or "
+            "`handle_query(mode, parameters)`."
         )
-    return oracle_cls
+
+    signature = inspect.signature(query_fn)
+    parameters = list(signature.parameters.values())
+    accepts_keyword_params = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters
+    )
+    accepts_parameter_object = any(
+        p.name in {"parameters", "params"} for p in parameters[1:]
+    )
+
+    class ModuleOracle:
+        """Adapter for a module-level inverse-task query function."""
+
+        def query(self, mode, **params):
+            if accepts_parameter_object:
+                return query_fn(mode, params)
+            if accepts_keyword_params:
+                return query_fn(mode, **params)
+            if len(parameters) >= 2:
+                return query_fn(mode, params)
+            if params:
+                raise OracleContractError(
+                    f"Module-level oracle {query_fn.__name__} accepts only a mode, "
+                    f"but action {mode!r} supplied parameters {sorted(params)}."
+                )
+            return query_fn(mode)
+
+        def __getattr__(self, name: str):
+            # Public module constants such as M remain available to validation
+            # solvers. Private module state never passes through this adapter.
+            if name.startswith("_"):
+                raise AttributeError(name)
+            return getattr(module, name)
+
+    ModuleOracle.__name__ = "Oracle"
+    ModuleOracle.__qualname__ = "Oracle"
+
+    for source_name, target_name in (
+        ("ACTIONS", "ACTIONS"),
+        ("actions", "actions"),
+        ("BUDGET", "BUDGET"),
+        ("_BUDGET", "BUDGET"),
+        ("QUERY_BUDGET", "QUERY_BUDGET"),
+        ("ANSWER_SCHEMA", "ANSWER_SCHEMA"),
+        ("answer_schema", "answer_schema"),
+    ):
+        if hasattr(module, source_name) and not hasattr(ModuleOracle, target_name):
+            setattr(ModuleOracle, target_name, getattr(module, source_name))
+    return ModuleOracle
 
 
 def _normalise_param(name: str, spec: Any) -> dict[str, Any]:
@@ -391,6 +548,34 @@ class Problem:
         budget = _first_attr(self.oracle, ("BUDGET", "budget", "QUERY_BUDGET"))
         self.budget_total: Optional[int] = int(budget) if isinstance(budget, numbers.Integral) else None
 
+        # Read the runtime inputs before setup makes this tree owner-only.
+        self._prompt_text = self._read_prompt()
+        self._golden = self._read_or_cache_golden()
+        self._custom_grader = self._read_or_cache_grader()
+
+    def _read_prompt(self) -> str:
+        path = self.directory / "problem.md"
+        if not path.is_file():
+            return ""
+        return path.read_text()
+
+    def _read_or_cache_golden(self) -> dict[str, Any]:
+        path = self.directory / "golden" / "expected.json"
+        if not path.is_file():
+            raise InverseTaskError(f"Missing golden answer at {path}")
+        data = json.loads(path.read_text())
+        if "answer" not in data:
+            raise InverseTaskError(f"{path} must contain an 'answer' key")
+        return copy.deepcopy(data)
+
+    def _read_or_cache_grader(self) -> Optional[Callable]:
+        key = _cache_key(self.directory)
+        if key in _GRADER_CACHE:
+            return _GRADER_CACHE[key]
+        grader = _load_custom_grader(self.directory)
+        _GRADER_CACHE[key] = grader
+        return grader
+
     @property
     def prompt(self) -> str:
         """The task text from problem.md, or "" if the prompt comes from Taiga.
@@ -398,8 +583,7 @@ class Problem:
         Empty is legitimate: an expert filling in the Create Problem form may
         supply the prompt there, in which case it arrives via extra_fields.
         """
-        path = self.directory / "problem.md"
-        return path.read_text() if path.is_file() else ""
+        return self._prompt_text
 
     @property
     def title(self) -> str:
@@ -417,13 +601,11 @@ class Problem:
         return None
 
     def golden(self) -> dict[str, Any]:
-        path = self.directory / "golden" / "expected.json"
-        if not path.is_file():
-            raise InverseTaskError(f"Missing golden answer at {path}")
-        data = json.loads(path.read_text())
-        if "answer" not in data:
-            raise InverseTaskError(f"{path} must contain an 'answer' key")
-        return data
+        return copy.deepcopy(self._golden)
+
+    @property
+    def custom_grader(self) -> Optional[Callable]:
+        return self._custom_grader
 
     def answer_shape(self) -> dict[str, Any]:
         """Shape-only description of the expected answer — never its values."""
@@ -624,7 +806,7 @@ class Session:
         self, transcript: str = "", extra_fields: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         golden = self.problem.golden()
-        custom = _load_custom_grader(self.problem.directory)
+        custom = self.problem.custom_grader
         if custom is not None:
             result = custom(
                 submission=self.submission,
@@ -974,6 +1156,11 @@ def load_session(
     return Session(Problem(problem_id, directory))
 
 
+def clear_runtime_caches() -> None:
+    """Drop process-lifetime caches (tests / selftest only)."""
+    _GRADER_CACHE.clear()
+
+
 # --------------------------------------------------------------------------- #
 # Prompt tool guide
 # --------------------------------------------------------------------------- #
@@ -1017,11 +1204,14 @@ def _call_example(action: dict[str, Any], mode: str) -> str:
         )
         return f"`{action['name']}({args})`"
     if not params:
-        return f'`query(action="{action["name"]}")`'
+        return f'`query_oracle(mode="{action["name"]}", parameters={{}})`'
     rendered = ", ".join(
         f'"{p["name"]}": {_TYPE_PLACEHOLDER.get(p["type"], "<value>")}' for p in params
     )
-    return f'`query(action="{action["name"]}", params={{{rendered}}})`'
+    return (
+        f'`query_oracle(mode="{action["name"]}", '
+        f"parameters={{{rendered}}})`"
+    )
 
 
 def render_tool_guide(session: "Session", mode: str = "query") -> str:
@@ -1042,8 +1232,8 @@ def render_tool_guide(session: "Session", mode: str = "query") -> str:
             )
         else:
             lines.append(
-                "Probe the black box with the **`query`** tool. Where the task above "
-                "names an operation, call it through `query` like this:"
+                "Probe the black box with **`query_oracle(mode, parameters)`**. "
+                "Where the task above names an operation, call it like this:"
             )
         lines += ["", "| Call | What it does | Budget |", "| --- | --- | --- |"]
         for action in problem.actions:
@@ -1055,15 +1245,17 @@ def render_tool_guide(session: "Session", mode: str = "query") -> str:
             lines.append(f"| {_call_example(action, mode)} | {description} | {cost} |")
     else:
         lines.append(
-            "Probe the black box with the **`query`** tool: `query(action=<string>, "
-            "params=<object>)`. The task above states which operations exist."
+            "Probe the black box with **`query_oracle(mode, parameters)`**: "
+            "`query_oracle(mode=<string>, parameters=<object>)`. The task above "
+            "states which operations exist."
         )
 
     shape = problem.answer_shape()
     lines += [
         "",
-        f"- **`submit_answer(answer)`** — record your final answer as JSON: "
-        f"`{answer_example(shape)}`. You may resubmit; only your last submission is graded.",
+        f"- **`submit_answer(answer)`** — pass a JSON value with this shape: "
+        f"`submit_answer(answer={answer_example(shape)})`. You may resubmit; "
+        "only your last submission is graded.",
         "- **`describe_oracle()`** — re-read this list and check your remaining budget. Free.",
     ]
 

@@ -35,8 +35,9 @@ sys.path.insert(0, str(REPO_ROOT / "mcp_server"))
 
 import core  # noqa: E402
 
-# Files the Dockerfile copies into the image. Keep in sync with docker/collect_problems.sh.
-SHIPPED_FILES = ("problem.md", "oracle/setup.py", "golden/expected.json")
+# Runtime files the container needs. problem.md is optional when the Task Prompt
+# is supplied on the Taiga form.
+SHIPPED_FILES = ("oracle/setup.py", "golden/expected.json")
 
 # Words that, in a *solver-visible* string, risk naming the method or the trap.
 # Advisory only — the expert decides. See step 8 of the authoring instructions.
@@ -453,16 +454,15 @@ def taiga_form_values(problem_id: str, directory: Path) -> str:
             f"\n--- Taiga Create Problem form values for {problem_id} ---",
             f"  Problem ID        {problem_id}",
             f"  Task Prompt       {prompt_note}",
-            "  Tools             (LEAVE EMPTY)",
-            "                    Giving the model bash or str_replace_editor lets it read",
-            "                    oracle/setup.py and golden/expected.json straight off disk.",
-            "  Grading Strategy  mcp   (NOT the default Rubric (Itemwise) — that ignores",
-            "                    your golden answer and asks an LLM to judge the transcript)",
+            "  Tools             (leave empty unless the task truly needs one)",
+            "  Grading Strategy  mcp   (NOT Agentic Grader, NOT Rubric Itemwise)",
             "  Docker Image      the published inverse-tasks image",
             "  Startup Command   python -u /app/mcp_server/server.py",
-            f"  Preloaded Files   mount this folder at /mnt/problems/{problem_id}/",
-            "                    (ship problem.md, oracle/, golden/ — never solution/)",
+            f"  Preloaded Files   mount oracle/ + golden/ at /mnt/problems/{problem_id}/",
+            "                    NEVER mount solution/, BRIEF, STATE, or reasoning_trap",
+            "  Supporting Files  optional human review only (NOT mounted)",
             "  Tell model about uploaded files   OFF",
+            "  Security          MCP/problem files are root-only; model tools run as uid 1000",
         ]
     )
 

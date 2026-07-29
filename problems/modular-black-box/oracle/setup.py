@@ -1,42 +1,90 @@
-"""Hidden system for the sample inverse task (TEACHING FIXTURE).
+"""oracle/setup.py — HIDDEN system. The model never sees this file.
 
-The box computes f(x) = (A*x + B) mod M for hidden A, B. The solver never sees A or B;
-it only sees outputs from evaluate(), under a query budget, plus non-committal help().
+Public probe API is `handle_query` / `query_oracle`, wrapped in a `class Oracle`
+so the Inverse_Tasks / Taiga MCP engine can load it.
 
-A fresh Oracle() is created per solver run, so module-level state is never shared across
-runs (the same isolation everglades-multitask's preview eval requires per attempt).
+The box computes f(x) = (a*x + b) mod M for hidden a, b. The solver only sees
+observations from budgeted probes — never the parameters, never judgments.
 """
+from __future__ import annotations
+
 import random
+
+# === Hidden parameters (the thing the model must infer) ===
+HIDDEN_PARAMS = {
+    "a": 23,
+    "b": 58,
+}
+
+# Known to the solver (stated in problem.md). Not hidden.
+M = 97
+_BUDGET = 6
+
+# Module-level session used by the free functions (`handle_query` /
+# `query_oracle`) when this file is imported from solution/main.py. Taiga
+# always constructs a fresh Oracle() per attempt instead.
+_MODULE_ORACLE = None
+
+
+def _system_observation(mode: str, params: dict, hidden: dict, modulus: int):
+    """The actual map — discrete modular affine transform."""
+    if mode == "evaluate":
+        if "x" not in params:
+            return {"error": "parameter 'x' is required"}
+        try:
+            x = int(params["x"])
+        except (TypeError, ValueError):
+            return {"error": "parameter 'x' must be an integer"}
+        return (hidden["a"] * x + hidden["b"]) % modulus
+    return {"error": f"unknown mode {mode!r}"}
+
+
+def handle_query(mode: str, parameters: dict | None = None):
+    """Public probe interface. Routes to modes."""
+    global _MODULE_ORACLE
+    if _MODULE_ORACLE is None:
+        _MODULE_ORACLE = Oracle()
+    return _MODULE_ORACLE.handle_query(mode, parameters)
+
+
+# Alias kept for solution scripts and local tooling that import query_oracle.
+query_oracle = handle_query
 
 
 class Oracle:
-    M = 97          # known modulus (stated in problem.md)
-    BUDGET = 6      # evaluate() calls allowed
-    _A = 23         # hidden
-    _B = 58         # hidden
+    """Taiga / Inverse_Tasks adapter around the same instrument.
 
-    # The probe surface handed to the solver. The engine turns each entry into a
-    # tool the model can call, so these names/descriptions must match what
-    # problem.md promises — and must not hint at the method or the trap.
-    #
-    # `sample` is intentionally absent: problem.md documents only two ways to
-    # call the box, so the noisy mode stays unexposed.
+    A fresh Oracle() is created per solver run / problem-run, so module-level
+    state is never shared across attempts.
+    """
+
+    M = M
+    BUDGET = _BUDGET
+    _A = HIDDEN_PARAMS["a"]
+    _B = HIDDEN_PARAMS["b"]
+
+    # Probe surface handed to the solver. Names must match problem.md.
+    # `sample` / noisy modes stay undeclared so they cannot be called.
     ACTIONS = [
         {
             "name": "evaluate",
             "description": "Return the box's output for your chosen integer x.",
             "params": {
-                "x": {"type": "integer", "description": "The input to the box.", "required": True}
+                "x": {
+                    "type": "integer",
+                    "description": "The input to the box.",
+                    "required": True,
+                }
             },
             "costs_budget": True,
         },
         {
             "name": "help",
-            "description": "Return a general hint. It will never tell you a or b.",
+            "description": "List available modes and remaining budget. Never reveals a or b.",
             "params": {
                 "question": {
                     "type": "string",
-                    "description": "What you want a hint about.",
+                    "description": "Unused; accepted for a uniform calling shape.",
                     "default": "",
                 }
             },
@@ -55,35 +103,58 @@ class Oracle:
 
     def __init__(self):
         self._used = 0
-        self._rng = random.Random(42)  # seeded: deterministic noise for the 'sample' mode
+        self._hidden = dict(HIDDEN_PARAMS)
+        self._rng = random.Random(42)
 
-    def _spend(self):
-        if self._used >= self.BUDGET:
-            raise RuntimeError("Query budget exceeded (6 query calls).")
+    def handle_query(self, mode: str, parameters: dict | None = None):
+        """Instrument entry point — observations only, never judgments."""
+        parameters = parameters or {}
+
+        if mode == "help":
+            # Lists modes + signatures. Does NOT recommend a mode or name a method.
+            return {
+                "description": "Integer black box with a known modulus.",
+                "modes": {
+                    "evaluate": "{x: integer} -> {observation: integer}",
+                    "help": "{} -> {description, modes, budget_remaining}",
+                },
+                "budget_remaining": self.BUDGET - self._used,
+                "modulus": self.M,
+            }
+
         self._used += 1
+        if self._used > self.BUDGET:
+            return {"error": "budget exceeded"}
 
-    # Thin wrappers so each declared ACTION is directly serviceable with the
-    # parameters it declares. query() below remains the implementation and the
-    # interface solution/*.py use.
+        obs = _system_observation(mode, parameters, self._hidden, self.M)
+        if isinstance(obs, dict) and "error" in obs:
+            return obs
+        return {"observation": obs, "unit": "integer"}
+
+    # Thin wrappers so each declared ACTION is directly serviceable, and so
+    # solution/*.py written against either contract keep working.
     def evaluate(self, x):
-        return self.query("evaluate", x=x)
+        result = self.handle_query("evaluate", {"x": x})
+        if isinstance(result, dict) and "observation" in result:
+            return result["observation"]
+        if isinstance(result, dict) and "error" in result:
+            raise RuntimeError(result["error"])
+        return result
 
     def help(self, question=""):
-        return self.query("help")
+        return self.handle_query("help", {"question": question})
 
-    def query(self, mode, x=None):
-        if mode in ("evaluate", "sample") and x is None:
-            raise ValueError("x is required for evaluate/sample modes.")
-        if mode == "evaluate":
-            self._spend()
-            return (self._A * x + self._B) % self.M
-        if mode == "sample":
-            # A noisy reading: realistic but deterministic via the seeded RNG.
-            self._spend()
-            noise = self._rng.choice([-1, 0, 1])
-            return ((self._A * x + self._B) % self.M + noise) % self.M
-        if mode == "help":
-            return ("Hint: the output you read may have wrapped around the modulus. "
-                    "Adjacent inputs leave no room for a hidden wrap between them. "
-                    "(This hint does not reveal the constants.)")
-        raise ValueError(f"Unknown mode: {mode!r}")
+    def query(self, mode, x=None, **params):
+        """Dispatcher for Inverse_Tasks when no per-action method is preferred.
+
+        Accepts both `query(mode, parameters={...})` kwargs and `query(mode, x=...)`.
+        """
+        if x is not None and "x" not in params:
+            params["x"] = x
+        result = self.handle_query(mode, params)
+        # Keep evaluate return shape stable for existing solvers (bare int).
+        if mode == "evaluate" and isinstance(result, dict) and "observation" in result:
+            return result["observation"]
+        if isinstance(result, dict) and "error" in result:
+            raise RuntimeError(result["error"])
+        return result

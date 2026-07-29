@@ -2,14 +2,13 @@
   "_comment": [
     "Example Taiga problems-metadata for this image. One entry per inverse task.",
     "Replace `image` with your pushed tag (never `latest`).",
-    "startup_command: the default publishes query/submit_answer/describe_oracle and",
-    "the model probes via query. Add --named-tools --problem-id <id> to publish one",
-    "named tool per declared oracle action instead.",
-    "Set the problem's grading strategy to `mcp` in Taiga, not the default",
-    "Rubric (Itemwise) — these tasks are graded deterministically by",
-    "grade_problem inside the container against golden/expected.json.",
-    "required_tools is empty on purpose: the model needs the oracle tools only,",
-    "and withholding bash means it cannot read the container filesystem."
+    "startup_command: publishes query_oracle / submit_answer / describe_oracle.",
+    "Grading strategy on the Create Problem form must be `mcp` (not Agentic Grader,",
+    "not Rubric Itemwise).",
+    "required_tools is empty because this task needs only MCP oracle tools.",
+    "The image and problem data are root-only; Taiga model tools run as uid 1000.",
+    "augment_prompt_with_input_files must be false so mounted paths are not listed",
+    "in the system prompt."
   ],
   "problem_set": {
     "owner": "rohit.ganti",
@@ -25,6 +24,14 @@
         "required_tools": [],
         "scratchpad": "allowed",
         "enabled_package_managers": [],
+        "enable_anthropic_api": false,
+        "domain_allowlist": [],
+        "grading_strategy": {
+          "type": "mcp",
+          "weight": 1.0
+        },
+        "augment_prompt_with_input_files": false,
+        "preloaded_files_mode": "replace",
         "setup_timeout_seconds": 60,
         "startup_timeout_seconds": 60,
         "tool_timeout_seconds": 30,

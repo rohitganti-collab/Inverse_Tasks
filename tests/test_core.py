@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -149,6 +150,54 @@ class TestOracleShapes(TempProblems):
         self.assertIsNone(s.problem.budget_total, "no BUDGET means unbudgeted")
         self.assertEqual(s.query("whatever", {"a": 1}), {"mode": "whatever", "kw": {"a": 1}})
 
+    def test_module_level_query_oracle_needs_no_adapter_class(self):
+        write_problem(
+            self.root,
+            "module-query",
+            """
+            BUDGET = 3
+            ACTIONS = [
+                {"name": "measure", "params": {"x": "integer"}},
+                {"name": "help", "costs_budget": False},
+            ]
+            ANSWER_SCHEMA = {"type": "array", "length": 1}
+
+            def query_oracle(mode, parameters=None):
+                parameters = parameters or {}
+                if mode == "measure":
+                    return {"observation": parameters["x"] * 7}
+                if mode == "help":
+                    return {"modes": ["measure", "help"]}
+                return {"error": "unknown mode"}
+            """,
+            {"answer": [14], "tolerance": 0},
+        )
+        s = self.session("module-query")
+        self.assertEqual(s.problem.budget_total, 3)
+        self.assertEqual([a["name"] for a in s.problem.actions], ["measure", "help"])
+        self.assertEqual(s.problem.answer_shape()["length"], 1)
+        self.assertEqual(s.query("measure", {"x": 2}), {"observation": 14})
+
+    def test_module_level_handle_query_supports_generic_passthrough(self):
+        write_problem(
+            self.root,
+            "handle-query",
+            """
+            _BUDGET = 2
+
+            def handle_query(mode, parameters=None):
+                return {"mode": mode, "parameters": parameters or {}}
+            """,
+            {"answer": "done"},
+        )
+        s = self.session("handle-query")
+        self.assertEqual(s.problem.budget_total, 2)
+        self.assertFalse(s.problem.actions_declared)
+        self.assertEqual(
+            s.query("custom-mode", {"value": 9}),
+            {"mode": "custom-mode", "parameters": {"value": 9}},
+        )
+
     def test_oracle_without_any_probe_surface_is_rejected(self):
         write_problem(
             self.root,
@@ -162,7 +211,7 @@ class TestOracleShapes(TempProblems):
         with self.assertRaises(core.OracleContractError):
             self.session("useless")
 
-    def test_missing_oracle_class_is_rejected(self):
+    def test_missing_supported_oracle_entrypoint_is_rejected(self):
         write_problem(
             self.root,
             "noclass",
@@ -172,7 +221,7 @@ class TestOracleShapes(TempProblems):
             """,
             {"answer": 1},
         )
-        with self.assertRaisesRegex(core.OracleContractError, "no class named `Oracle`"):
+        with self.assertRaisesRegex(core.OracleContractError, "no supported oracle entry point"):
             self.session("noclass")
 
     def test_reserved_action_name_is_rejected(self):
@@ -615,13 +664,16 @@ class TestToolGuide(TempProblems):
 
     def test_query_mode_shows_the_query_convention(self):
         text = self.guide("query")
-        self.assertIn('query(action="evaluate", params={"x": <integer>})', text)
-        self.assertIn('query(action="hint")', text)
+        self.assertIn(
+            'query_oracle(mode="evaluate", parameters={"x": <integer>})',
+            text,
+        )
+        self.assertIn('query_oracle(mode="hint", parameters={})', text)
 
     def test_named_mode_shows_bare_tool_calls(self):
         text = self.guide("named")
         self.assertIn("`evaluate(x=<integer>)`", text)
-        self.assertNotIn("query(action=", text)
+        self.assertNotIn("query_oracle(mode=", text)
 
     def test_budget_costs_are_stated_per_action(self):
         text = self.guide()
@@ -774,8 +826,8 @@ class TestShippedSampleProblem(unittest.TestCase):
         s = self.session()
         self.assertEqual([a["name"] for a in s.problem.actions], ["evaluate", "help"])
         prompt = s.problem.prompt
-        self.assertIn("evaluate(x)", prompt)
-        self.assertIn("help(question)", prompt)
+        self.assertIn("query_oracle(mode, parameters)", prompt)
+        self.assertIn('query_oracle(mode="help"', prompt)
 
     def test_the_intended_path_solves_it_within_budget(self):
         s = self.session()
@@ -810,6 +862,101 @@ class TestShippedSampleProblem(unittest.TestCase):
         shape = json.dumps(self.session().problem.answer_shape())
         self.assertNotIn("23", shape)
         self.assertNotIn("58", shape)
+
+
+class TestProblemPermissionHardening(TempProblems):
+    """Runtime data stays restartable while uid 1000 cannot read it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._previous = {
+            name: os.environ.get(name)
+            for name in (
+                "INVERSE_TASKS_RUNTIME",
+                "INVERSE_TASKS_HARDEN_PERMISSIONS",
+                "INVERSE_TASKS_REQUIRE_PRIVATE_PROBLEMS",
+            )
+        }
+        os.environ["INVERSE_TASKS_RUNTIME"] = "taiga"
+        os.environ["INVERSE_TASKS_HARDEN_PERMISSIONS"] = "1"
+        os.environ["INVERSE_TASKS_REQUIRE_PRIVATE_PROBLEMS"] = "1"
+        core.clear_runtime_caches()
+        self.addCleanup(self._restore_environment)
+
+    def _restore_environment(self) -> None:
+        for name, value in self._previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        core.clear_runtime_caches()
+
+    def test_hardening_preserves_secrets_and_supports_a_fresh_process_load(self):
+        write_problem(
+            self.root,
+            "private",
+            """
+            class Oracle:
+                BUDGET = 3
+                _A = 11
+                ACTIONS = [{"name": "evaluate",
+                            "params": {"x": {"type": "integer", "required": True}}}]
+                def evaluate(self, x):
+                    return x + self._A
+            """,
+            {"answer": 11, "tolerance": 0},
+            prompt="Recover the offset.",
+        )
+        problem_dir = self.root / "private"
+        (problem_dir / "solution").mkdir()
+        (problem_dir / "solution" / "main.py").write_text("def solve(o): return 11\n")
+        (problem_dir / "BRIEF.md").write_text("secret author notes\n")
+
+        session = self.session("private")
+        protected = core.harden_problem_permissions(session.problem.directory)
+        self.assertIn("oracle/setup.py", protected)
+        self.assertIn("golden/expected.json", protected)
+
+        # Content is preserved, including author-only files.
+        self.assertIn("_A = 11", (problem_dir / "oracle" / "setup.py").read_text())
+        self.assertIn('"answer": 11', (problem_dir / "golden" / "expected.json").read_text())
+        self.assertTrue((problem_dir / "solution" / "main.py").is_file())
+        self.assertTrue((problem_dir / "BRIEF.md").is_file())
+
+        # Every directory is owner-only and every regular file has no group or
+        # other access, matching Taiga's root-MCP / uid-1000-model boundary.
+        for path in (problem_dir, *problem_dir.rglob("*")):
+            if path.is_dir():
+                self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+            elif path.is_file():
+                self.assertEqual(path.stat().st_mode & 0o077, 0)
+
+        self.assertEqual(session.query("evaluate", {"x": 0}), 11)
+        session.submit("11")
+        self.assertEqual(session.grade()["subscores"]["correct"], 1.0)
+
+        # Simulate a brand-new MCP process: no process cache is needed to reload.
+        core.clear_runtime_caches()
+        again = core.load_session("private", [self.root])
+        self.assertEqual(again.query("evaluate", {"x": 1}), 12)
+        again.submit("11")
+        self.assertEqual(again.grade()["subscores"]["correct"], 1.0)
+
+    def test_hardening_is_inert_outside_the_taiga_runtime(self):
+        os.environ.pop("INVERSE_TASKS_RUNTIME", None)
+        directory = write_problem(
+            self.root,
+            "authoring",
+            "class Oracle:\n    def query(self, mode, **params): return 1\n",
+            {"answer": 1},
+        )
+        oracle_path = directory / "oracle" / "setup.py"
+        oracle_path.chmod(0o644)
+        before = oracle_path.read_text()
+
+        self.assertEqual(core.seal_secret_files(directory), [])
+        self.assertEqual(oracle_path.read_text(), before)
+        self.assertEqual(oracle_path.stat().st_mode & 0o777, 0o644)
 
 
 if __name__ == "__main__":

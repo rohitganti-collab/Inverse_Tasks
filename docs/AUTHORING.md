@@ -264,7 +264,8 @@ solver-visible text names the method; and the files the image needs are present.
 
 ## 7. Run it on Taiga
 
-Build and push, then point a problem at it:
+Build and push, then point a problem at it. See `docs/EXPERT_WORKFLOW.md` for
+the Create Problem form field-by-field (matching the UI screenshots).
 
 ```json
 {
@@ -272,30 +273,21 @@ Build and push, then point a problem at it:
   "image": "<registry>/<org>/inverse-tasks:v1",
   "startup_command": "python -u /app/mcp_server/server.py",
   "required_tools": [],
-  "scratchpad": "allowed"
+  "scratchpad": "allowed",
+  "augment_prompt_with_input_files": false
 }
 ```
 
-Two things matter here:
+Critical settings:
 
-- **The default startup command publishes `query`.** The model probes the oracle
-  with `query(action=..., params=...)`, and `setup_problem` appends a generated
-  guide showing the exact calls for your `ACTIONS`. If you would rather publish
-  one named tool per action, add `--named-tools --problem-id <id>` — it needs the
-  id because MCP sends its tool list before Taiga says which problem is running.
-- **Set the grading strategy to `mcp`.** These tasks are deterministic and
-  graded by `grade_problem` inside the container. The Create Problem form
-  defaults to `Rubric (Itemwise)`, which would hand your transcript to an LLM
-  judge and ignore your golden answer entirely.
+- **Tools empty by default.** Oracle-only tasks need no broad model tools.
+- **Grading strategy `mcp`.** Not Agentic Grader, not Rubric (Itemwise).
+- **Preloaded Files** mount only `oracle/` + `golden/` at
+  `/mnt/problems/<id>/`. Never mount `solution/`.
+- **Tell model about uploaded files: OFF.**
 
-`required_tools` is usually empty: the model needs your oracle tools, not bash
-or an editor. Leaving out `bash` also means the model has no way to read the
-container filesystem, which is a second line of defence behind the allowlist.
-
-### Iterating without a rebuild
-
-The image searches `/mnt/problems` before its baked-in `/app/problems`
-(`INVERSE_TASKS_PROBLEM_DIRS`). Upload your problem folder as
-`preloaded_files` mounted at `/mnt/problems/<problem_id>/` to add or override a
-problem in a running container. Set `augment_prompt_with_input_files: false` so
-the mounted scaffolding isn't listed in the model's system prompt.
+The image starts MCP as root and keeps its implementation and baked problem
+data owner-only. At setup it also makes writable preloaded problem trees
+owner-only. Taiga's broad model tools run as uid/gid `1000:1000`, so a task may
+opt into one without exposing the oracle. Files remain intact so an MCP restart
+can reload the problem and grade the persisted submission.

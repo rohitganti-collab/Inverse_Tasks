@@ -1,22 +1,28 @@
-# The modular black box
+# Task setup
 
-You are given access to a black box. It accepts one integer `x` and returns one integer.
-Internally it computes:
+You are given access to a black box. It accepts one integer `x` and returns one
+integer. Internally it computes
 
 ```
 output = (a * x + b) mod 97
 ```
 
-where `a` and `b` are fixed whole numbers you cannot see, and `97` is a known modulus.
+where `a` and `b` are fixed whole numbers you cannot see, and `97` is a known
+modulus.
 
-You may call the box in two ways:
+# What you can use
 
-- `evaluate(x)` — returns the box's output for your chosen `x`. You may call this at most
-  **6 times** in total.
-- `help(question)` — returns a general hint. It will never tell you `a` or `b`.
+You have access to `query_oracle(mode, parameters)`. Call
+`query_oracle(mode="help", parameters={})` to discover available modes and your
+remaining budget.
 
-**Your task:** report the pair `(a, b)`.
+# Your task
 
-Spend your evaluations deliberately. A solver who treats the box as an ordinary straight
-line — fitting a slope from two widely-spaced points — can be misled when the internal
-result wraps past the modulus between those points.
+Recover the hidden pair `(a, b)`.
+
+# Output format
+
+Submit a JSON array of two integers, in this order: `a`, then `b`.
+Exact integers — no tolerance.
+
+Submit your answer via `submit_answer(answer)`.

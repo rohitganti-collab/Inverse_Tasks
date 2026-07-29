@@ -1,21 +1,25 @@
-# TEMPLATE — your task title
+# Task setup
 
-Write this section **last, in your own words** (step 8 of the authoring guide).
-State the setup and the budget, and nothing about how to solve it: the solver
-must not be able to read the intended method or the error it discriminates out
-of your wording.
+<!-- Experts: paste this into Taiga's Task Prompt field (preferred), or keep it
+     here as problem.md. The container appends the query_oracle calling guide. -->
 
-You are given access to a black box. Describe what it accepts and returns, and
-what is known about its internal form.
+Describe the hidden system in your own words: what the box accepts, what it
+returns, and what is known about its internal form. State the query budget.
 
-You may call the box in these ways:
+Do **not** name the intended method, the trap, or how to solve it.
 
-- `evaluate(x)` — describe what it returns. You may call this at most **N**
-  times in total.
-- `help(question)` — returns a general hint. It will never tell you the hidden
-  values.
+# What you can use
 
-**Your task:** state exactly what to report, and in what order.
+You have access to `query_oracle(mode, parameters)`. Call
+`query_oracle(mode="help", parameters={})` to discover available modes and your
+remaining budget.
 
-Note: the tool names listed here must match the `name` fields in your oracle's
-`ACTIONS`, and the answer you ask for must match `golden/expected.json`.
+# Your task
+
+State exactly what to recover, in what format and order.
+
+# Output format
+
+State the exact JSON shape (e.g. a length-2 integer array).
+
+Submit your answer via `submit_answer(answer)`.

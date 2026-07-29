@@ -41,8 +41,11 @@ def collect(src: Path, dest: Path) -> int:
         if problem_dir.name.startswith(("_", ".")):
             print(f"  skip {problem_dir.name}/ (reserved prefix)")
             continue
-        if not (problem_dir / "problem.md").is_file():
-            print(f"  skip {problem_dir.name}/ (no problem.md)")
+        if not (problem_dir / "oracle" / "setup.py").is_file():
+            print(f"  skip {problem_dir.name}/ (no oracle/setup.py)")
+            continue
+        if not (problem_dir / "golden" / "expected.json").is_file():
+            print(f"  skip {problem_dir.name}/ (no golden/expected.json)")
             continue
 
         target = dest / problem_dir.name

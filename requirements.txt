@@ -1,5 +1,5 @@
-# Pinned to a major range: FastMCP's decorator/add_tool surface is what the
-# server builds on, and an unbounded `mcp` could pull a breaking 2.x at build
-# time. Bump deliberately and let `--selftest` (run during docker build) confirm.
-mcp>=1.2,<2
+# Match the MCP range in Taiga's canonical taiga-core 0.4.3 snapshot. The
+# generated lock file pins the exact transitive build; widen this range only
+# after the real-MCP selftest has passed.
+mcp>=1.3.0,<=1.9.4
 pydantic>=2.0,<3

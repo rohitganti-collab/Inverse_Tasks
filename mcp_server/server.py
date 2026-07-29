@@ -15,20 +15,20 @@ says "call `evaluate(x)`" gets a tool literally named `evaluate` taking `x`.
 **Generic mode** — the problem isn't known until Taiga calls `setup_problem`
 (one image, many problems, chosen per problem-run). MCP publishes its tool list
 during the initialize handshake, before `setup_problem` runs, so per-problem
-tool names can't exist yet. The model instead gets `query(action, params)` plus
-`describe_oracle()` to discover the surface at runtime.
+tool names can't exist yet. The model instead gets
+`query_oracle(mode, parameters)` plus `describe_oracle()` to discover the
+surface at runtime. `query(action, params)` remains as a compatibility alias.
 
 Either way the model never sees `setup_problem` / `grade_problem` (Taiga hides
 the scaffold hooks) and never reaches the oracle except through its declared
 actions — the hidden constants, the intended solver, and the trap write-up all
 stay out of reach.
 """
-from __future__ import annotations
-
 import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -74,6 +74,8 @@ class _State:
 state = _State()
 mcp = FastMCP("inverse-tasks")
 
+_STATE_VERSION = 1
+
 
 def _dump(value: Any) -> str:
     """Render an observation for the model: scalars bare, structures as JSON."""
@@ -83,6 +85,89 @@ def _dump(value: Any) -> str:
     if isinstance(value, (int, float, bool)) or value is None:
         return json.dumps(value)
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _state_path() -> Path:
+    """Root-owned snapshot used if Taiga restarts MCP before grading."""
+    configured = os.environ.get("INVERSE_TASKS_STATE_PATH")
+    return Path(configured or "/tmp/inverse-tasks/session.json")
+
+
+def _save_session(session: core.Session) -> bool:
+    """Persist the grading-relevant attempt state without the golden answer."""
+    payload = {
+        "version": _STATE_VERSION,
+        "problem_id": session.problem.problem_id,
+        "problem_dir": str(session.problem.directory.resolve()),
+        "calls_used": session.calls_used,
+        "call_log": core._jsonable(session.call_log),
+        "submission_raw": session.submission_raw,
+        "submission": core._jsonable(session.submission),
+        "submitted": session.submitted,
+    }
+    path = _state_path()
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        temporary.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        return True
+    except Exception as exc:  # noqa: BLE001 - persistence must not break a live attempt
+        log(f"WARNING: could not persist attempt state to {path}: {exc}")
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _restore_session(problem_id: str) -> Optional[core.Session]:
+    """Restore submission state after an MCP-process restart.
+
+    Taiga may restart the MCP process between setup and grading while keeping
+    the container filesystem. The problem directory is checked as well as the
+    id so a stale local-development snapshot can never attach to another task.
+    """
+    path = _state_path()
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != _STATE_VERSION:
+            return None
+        if payload.get("problem_id") != problem_id:
+            return None
+
+        current_directory = core.resolve_problem_dir(problem_id).resolve()
+        saved_directory = Path(payload.get("problem_dir", "")).resolve()
+        if saved_directory != current_directory:
+            return None
+
+        session = core.load_session(problem_id)
+        calls_used = int(payload.get("calls_used", 0))
+        if calls_used < 0:
+            raise ValueError("calls_used cannot be negative")
+        call_log = payload.get("call_log", [])
+        if not isinstance(call_log, list):
+            raise ValueError("call_log must be a list")
+
+        session.calls_used = calls_used
+        session.call_log = call_log
+        session.submission_raw = payload.get("submission_raw")
+        session.submission = payload.get("submission")
+        session.submitted = bool(payload.get("submitted", False))
+        state.session = session
+        log(f"restored attempt state for {problem_id!r} from {path}")
+        return session
+    except Exception as exc:  # noqa: BLE001 - malformed state becomes an internal failure
+        log(f"WARNING: could not restore attempt state from {path}: {exc}")
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -108,10 +193,12 @@ def setup_problem(
 
     session = core.load_session(problem_id)
     state.session = session
+    protected = core.harden_problem_permissions(session.problem.directory)
     log(
         f"setup_problem: {problem_id} "
         f"(actions={[a['name'] for a in session.problem.actions]}, "
-        f"budget={session.problem.budget_total})"
+        f"budget={session.problem.budget_total}"
+        f"{f', protected_files={len(protected)}' if protected else ''})"
     )
 
     extras = dict(extra_fields or {})
@@ -144,6 +231,7 @@ def setup_problem(
     for suffix_key in ("prompt_suffix", "task_prompt_suffix"):
         if extras.get(suffix_key):
             prompt = f"{prompt}\n\n{extras[suffix_key]}"
+    _save_session(session)
     return prompt
 
 
@@ -154,7 +242,7 @@ def grade_problem(
     extra_fields: Optional[dict] = None,
 ) -> Grade:
     """Score the submitted answer against this problem's golden answer."""
-    session = state.session
+    session = state.session or _restore_session(problem_id)
     if session is None:
         return Grade(
             subscores={"correct": 0.0},
@@ -208,17 +296,17 @@ def describe_oracle() -> str:
 
 
 @mcp.tool()
-def submit_answer(answer: str) -> str:
-    """Submit your final answer, as JSON (e.g. `[23, 58]` or `{"a": 23, "b": 58}`).
+def submit_answer(answer: Any) -> str:
+    """Submit your final answer as a JSON value.
 
-    Call `describe_oracle` to see the expected answer shape. You may resubmit;
-    only your most recent submission is graded.
+    Call `describe_oracle` to see the expected shape. Arrays, objects, numbers,
+    strings, and booleans are accepted directly; a JSON-encoded string is also
+    accepted for compatibility. You may resubmit; only your most recent
+    submission is graded.
     """
     session = state.require()
-    try:
-        result = session.submit(answer)
-    except core.InverseTaskError as exc:
-        return f"Answer rejected: {exc}"
+    result = session.submit(answer)
+    _save_session(session)
 
     message = f"Recorded answer: {json.dumps(result['accepted'])}"
     if result["warnings"]:
@@ -231,25 +319,37 @@ def submit_answer(answer: str) -> str:
     return message
 
 
-@mcp.tool()
-def query(action: str, params: Optional[dict] = None) -> str:
-    """Probe the black box.
-
-    `action` names the operation and `params` is a JSON object of that action's
-    arguments, e.g. action="evaluate", params={"x": 0}. Call `describe_oracle`
-    to see which actions exist, what parameters they take, and which spend query
-    budget.
-
-    This is the primary way to query the black box. It is registered with the
-    same decorator as the scaffold hooks rather than added dynamically, so the
-    critical path does not depend on any particular FastMCP `add_tool` signature.
-    """
+def _probe(action: str, params: Optional[dict] = None) -> str:
+    """Shared implementation for both generic probe spellings."""
     session = state.require()
     try:
         observation = session.query(action, params or {})
-    except core.InverseTaskError as exc:
-        return f"Error: {exc}"
+    finally:
+        # A call that raises inside the oracle still spends budget; persist that
+        # counter before FastMCP turns the exception into an isError response.
+        _save_session(session)
     return _dump(observation)
+
+
+@mcp.tool()
+def query_oracle(mode: str, parameters: Optional[dict] = None) -> str:
+    """Probe the hidden system.
+
+    `mode` names the operation and `parameters` is a JSON object containing its
+    arguments. Call `describe_oracle` for the available modes, parameter types,
+    and remaining query budget.
+    """
+    return _probe(mode, parameters)
+
+
+@mcp.tool()
+def query(action: str, params: Optional[dict] = None) -> str:
+    """Compatibility alias for `query_oracle(mode, parameters)`.
+
+    New inverse tasks should use `query_oracle`; this spelling remains available
+    so older task prompts and metadata continue to run unchanged.
+    """
+    return _probe(action, params)
 
 
 # Alias kept for the dynamically-synthesised named tools to dispatch through.
@@ -329,7 +429,14 @@ def selftest(problem_id: Optional[str] = None) -> int:
     try:
         names = published_tool_names()
         log(f"selftest: published tools: {names}")
-        for required in ("setup_problem", "grade_problem", "query", "submit_answer", "describe_oracle"):
+        for required in (
+            "setup_problem",
+            "grade_problem",
+            "query_oracle",
+            "query",
+            "submit_answer",
+            "describe_oracle",
+        ):
             check(required in names, f"tool {required!r} is published")
     except Exception as exc:  # noqa: BLE001 - any failure here is a real defect
         check(False, f"mcp.list_tools() works ({type(exc).__name__}: {exc})")
@@ -367,8 +474,11 @@ def selftest(problem_id: Optional[str] = None) -> int:
             if p["required"] or "default" in p
         }
         before = session.calls_used
-        observation = query(budgeted["name"], params)
-        check(not observation.startswith("Error:"), f"query({budgeted['name']!r}) returns an observation")
+        observation = query_oracle(budgeted["name"], params)
+        check(
+            bool(observation),
+            f"query_oracle({budgeted['name']!r}) returns an observation",
+        )
         check(session.calls_used == before + 1, "a budgeted query spends exactly one call")
 
     # 5. Grading: the golden answer scores 1.0, a wrong one scores 0.0.
@@ -456,7 +566,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.selftest:
         sys.exit(selftest(problem_id))
 
-    log("model-facing tools: query, submit_answer, describe_oracle")
+    log(
+        "model-facing tools: query_oracle, submit_answer, describe_oracle "
+        "(query is a compatibility alias)"
+    )
     mcp.run(transport="stdio")
 
 

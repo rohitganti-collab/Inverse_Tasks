@@ -120,7 +120,14 @@ class TestScaffoldHooks(ServerTestCase):
         write_problem(self.root, "demo", SIMPLE_ORACLE, {"answer": [5, 2], "tolerance": 0})
 
     def test_scaffold_hooks_are_published(self):
-        for name in ("setup_problem", "grade_problem", "describe_oracle", "submit_answer"):
+        for name in (
+            "setup_problem",
+            "grade_problem",
+            "describe_oracle",
+            "query_oracle",
+            "query",
+            "submit_answer",
+        ):
             self.assertIn(name, self.srv.mcp.tools)
 
     def test_setup_problem_returns_the_prompt_with_the_tool_guide(self):
@@ -131,7 +138,7 @@ class TestScaffoldHooks(ServerTestCase):
 
     def test_tool_guide_documents_the_query_convention_in_generic_mode(self):
         prompt = self.srv.setup_problem("demo")
-        self.assertIn('query(action="evaluate"', prompt)
+        self.assertIn('query_oracle(mode="evaluate"', prompt)
         self.assertIn("submit_answer", prompt)
         self.assertIn("Query budget: 3", prompt)
 
@@ -219,19 +226,26 @@ class TestModelFacingFlow(ServerTestCase):
         self.assertNotIn("answer", shape)
         self.assertNotIn(5, json.loads(json.dumps(list(shape.values()))))
 
-    def test_generic_query_probes_the_oracle(self):
-        self.assertEqual(self.srv.mcp.tools["query"]["fn"]("evaluate", {"x": 1}), "7")
+    def test_generic_query_oracle_probes_the_oracle(self):
+        self.assertEqual(
+            self.srv.mcp.tools["query_oracle"]["fn"]("evaluate", {"x": 1}),
+            "7",
+        )
         self.assertEqual(self.srv.state.session.calls_used, 1)
 
-    def test_generic_query_reports_errors_as_text(self):
-        result = self.srv.mcp.tools["query"]["fn"]("bogus", {})
-        self.assertIn("Unknown action", result)
+    def test_legacy_query_alias_still_probes_the_oracle(self):
+        self.assertEqual(self.srv.mcp.tools["query"]["fn"]("evaluate", {"x": 1}), "7")
+
+    def test_generic_query_raises_so_mcp_marks_the_result_as_an_error(self):
+        with self.assertRaisesRegex(core.UnknownAction, "Unknown action"):
+            self.srv.mcp.tools["query_oracle"]["fn"]("bogus", {})
 
     def test_budget_exhaustion_is_reported_to_the_model(self):
-        query = self.srv.mcp.tools["query"]["fn"]
+        query = self.srv.mcp.tools["query_oracle"]["fn"]
         for x in range(3):
             query("evaluate", {"x": x})
-        self.assertIn("budget", query("evaluate", {"x": 9}).lower())
+        with self.assertRaisesRegex(core.BudgetExceeded, "budget"):
+            query("evaluate", {"x": 9})
 
     def test_happy_path_scores_one(self):
         self.srv.mcp.tools["query"]["fn"]("evaluate", {"x": 0})
@@ -271,6 +285,24 @@ class TestModelFacingFlow(ServerTestCase):
         message = self.srv.submit_answer("a is 5 and b is 2")
         self.assertIn("Warning", message)
         self.assertEqual(self.srv.grade_problem("demo").subscores["correct"], 0.0)
+
+    def test_grade_restores_the_submission_after_an_mcp_restart(self):
+        self.srv.mcp.tools["query_oracle"]["fn"]("evaluate", {"x": 0})
+        self.srv.submit_answer("[5, 2]")
+        self.srv.state.session = None
+
+        grade = self.srv.grade_problem("demo", transcript="after restart")
+
+        self.assertFalse(grade.env_internal_failure)
+        self.assertEqual(grade.subscores["correct"], 1.0)
+        self.assertEqual(grade.metadata["budget_used"], 1)
+
+    def test_attempt_snapshot_is_root_only_and_omits_the_expected_answer_key(self):
+        snapshot = self.srv._state_path()
+        payload = json.loads(snapshot.read_text())
+        self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("expected", payload)
+        self.assertEqual(payload["problem_id"], "demo")
 
 
 class TestBoundMode(ServerTestCase):
@@ -425,7 +457,14 @@ class TestSelfTest(ServerTestCase):
     def test_selftest_enumerates_the_required_tools(self):
         write_problem(self.root, "demo", SIMPLE_ORACLE, {"answer": [5, 2], "tolerance": 0})
         names = self.srv.published_tool_names()
-        for required in ("setup_problem", "grade_problem", "query", "submit_answer", "describe_oracle"):
+        for required in (
+            "setup_problem",
+            "grade_problem",
+            "query_oracle",
+            "query",
+            "submit_answer",
+            "describe_oracle",
+        ):
             self.assertIn(required, names)
 
 

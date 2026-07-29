@@ -1,0 +1,2 @@
+# Python packages this task needs beyond the image baseline.
+# This teaching fixture is stdlib-only — no extra deps.

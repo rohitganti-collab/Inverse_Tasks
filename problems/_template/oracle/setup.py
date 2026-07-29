@@ -1,34 +1,27 @@
 """TEMPLATE oracle — copy this folder to problems/<your-problem-id>/ and edit.
 
-The engine only requires a class named `Oracle`. Everything below is either
-required (`ACTIONS` or public methods or `query`) or optional-with-a-default.
+The model never sees this file. In Taiga it is root-owned and owner-only while
+model-side tools run as uid 1000. The model may only probe through
+`query_oracle(mode, parameters)`.
 
-Rules that matter for task quality (see sample_experts_instructions.md):
-  * Keep the hidden ground truth in private attributes (leading underscore).
-  * Never let a description, hint, or error message name the method or the trap.
-  * Seed any randomness so a run is reproducible.
+Contract (pick one entry point):
+  * `class Oracle` with `ACTIONS` + methods  (recommended for Inverse_Tasks)
+  * or module-level `query_oracle(mode, parameters)` / `handle_query(...)`
+
+Rules:
+  * Hidden ground truth in underscore-prefixed names or HIDDEN_PARAMS.
+  * Never return judgments (no check_*/validate_* modes).
+  * `help` lists modes + budget only — no method names, no strategy hints.
+  * Seed randomness. A fresh Oracle() is built per attempt.
 """
 
 
 class Oracle:
-    # ---- Public constants the solver is allowed to know ------------------- #
-    # Anything without a leading underscore may be read by the intended
-    # solver in solution/main.py, so put stated-in-the-prompt facts here.
+    BUDGET = 6
 
-    BUDGET = 6          # Budgeted calls allowed. Set to None for unlimited.
-
-    # ---- Hidden ground truth --------------------------------------------- #
+    # Hidden ground truth — underscore = unreachable by solvers / the model.
     _SECRET = 42
 
-    # ---- The probe surface ------------------------------------------------ #
-    # Each entry becomes a tool the model can call. Names must match what your
-    # problem.md tells the solver to call.
-    #
-    # params: {name: {"type": integer|number|string|boolean|array|object,
-    #                 "description": str,
-    #                 "required": bool,        # default True unless a default is given
-    #                 "default": ...}}
-    # costs_budget: whether a call spends query budget (default True).
     ACTIONS = [
         {
             "name": "evaluate",
@@ -40,34 +33,38 @@ class Oracle:
         },
         {
             "name": "help",
-            "description": "Return a general hint. It never reveals the hidden values.",
+            "description": "List available modes and remaining budget. Never reveals hidden values.",
             "params": {
-                "question": {"type": "string", "description": "What to hint about.", "default": ""},
+                "question": {
+                    "type": "string",
+                    "description": "Unused; accepted for a uniform calling shape.",
+                    "default": "",
+                },
             },
             "costs_budget": False,
         },
     ]
 
-    # Shape of the expected answer — shape only, never the values. Optional; if
-    # omitted it is inferred from golden/expected.json.
     ANSWER_SCHEMA = {
         "type": "array",
         "length": 1,
         "item_types": ["integer"],
-        "description": "Describe the answer's shape for the solver.",
+        "description": "Describe the answer shape the model must submit.",
     }
 
     def __init__(self):
-        # A fresh Oracle is constructed for every attempt, so per-run state
-        # belongs here rather than at class level.
         self._used = 0
 
-    # ---- Implementation --------------------------------------------------- #
-    # You may implement one method per action (recommended, shown here) or a
-    # single `query(mode, **params)` dispatcher. The engine supports both.
+    def evaluate(self, x: int):
+        # Replace with your forward map. Return an observation, never the secret.
+        return (int(x) + self._SECRET) % 100
 
-    def evaluate(self, x):
-        return (x + self._SECRET) % 100
-
-    def help(self, question=""):
-        return "Hint: think about what a single probe can and cannot pin down."
+    def help(self, question: str = ""):
+        return {
+            "description": "Replace with one neutral line about the system.",
+            "modes": {
+                "evaluate": "{x: integer} -> {observation: integer}",
+                "help": "{} -> {description, modes, budget_remaining}",
+            },
+            "budget_remaining": self.BUDGET - self._used,
+        }
