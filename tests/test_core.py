@@ -578,6 +578,126 @@ class TestSignatureSynthesis(unittest.TestCase):
             self.assertIn("v", inspect.signature(fn).parameters)
 
 
+class TestToolGuide(TempProblems):
+    ORACLE = """
+        class Oracle:
+            BUDGET = 4
+            ACTIONS = [
+                {"name": "evaluate",
+                 "description": "Return the output for x.",
+                 "params": {"x": {"type": "integer", "required": True}}},
+                {"name": "hint", "description": "A free hint.", "costs_budget": False},
+            ]
+            def evaluate(self, x):
+                return x
+            def hint(self):
+                return "no comment"
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        write_problem(
+            self.root, "guide", self.ORACLE, {"answer": [1, 2], "tolerance": 0, "keys": ["a", "b"]}
+        )
+
+    def guide(self, mode="query") -> str:
+        return core.render_tool_guide(self.session("guide"), mode)
+
+    def test_query_mode_shows_the_query_convention(self):
+        text = self.guide("query")
+        self.assertIn('query(action="evaluate", params={"x": <integer>})', text)
+        self.assertIn('query(action="hint")', text)
+
+    def test_named_mode_shows_bare_tool_calls(self):
+        text = self.guide("named")
+        self.assertIn("`evaluate(x=<integer>)`", text)
+        self.assertNotIn("query(action=", text)
+
+    def test_budget_costs_are_stated_per_action(self):
+        text = self.guide()
+        evaluate_row = next(line for line in text.splitlines() if "evaluate" in line)
+        hint_row = next(line for line in text.splitlines() if "hint" in line and "|" in line)
+        self.assertIn("costs 1 query", evaluate_row)
+        self.assertIn("free", hint_row)
+
+    def test_total_budget_is_stated(self):
+        self.assertIn("Query budget: 4 call(s)", self.guide())
+
+    def test_submission_format_is_shown_without_the_answer(self):
+        text = self.guide()
+        self.assertIn("[<integer>, <integer>]", text)
+        self.assertNotIn("[1, 2]", text)
+
+    def test_guide_never_contains_golden_values(self):
+        write_problem(self.root, "secret", self.ORACLE, {"answer": [4242, 7171]})
+        text = core.render_tool_guide(self.session("secret"), "query")
+        self.assertNotIn("4242", text)
+        self.assertNotIn("7171", text)
+
+    def test_undeclared_oracle_gets_a_generic_guide(self):
+        write_problem(
+            self.root,
+            "bare",
+            "class Oracle:\n    def query(self, mode, **kw):\n        return 1\n",
+            {"answer": 1},
+        )
+        text = core.render_tool_guide(self.session("bare"), "query")
+        self.assertIn("query", text)
+        self.assertIn("submit_answer", text)
+
+    def test_unbudgeted_oracle_omits_the_budget_line(self):
+        write_problem(
+            self.root,
+            "nobudget",
+            self.ORACLE.replace("BUDGET = 4", "pass"),
+            {"answer": [1, 2]},
+        )
+        self.assertNotIn("Query budget", core.render_tool_guide(self.session("nobudget")))
+
+
+class TestAnswerExample(unittest.TestCase):
+    def test_array_example_matches_length_and_types(self):
+        self.assertEqual(
+            core.answer_example({"type": "array", "length": 3, "item_types": ["integer"]}),
+            "[<integer>, <integer>, <integer>]",
+        )
+
+    def test_mixed_item_types(self):
+        self.assertEqual(
+            core.answer_example(
+                {"type": "array", "length": 2, "item_types": ["integer", "string"]}
+            ),
+            "[<integer>, <string>]",
+        )
+
+    def test_object_example_lists_keys(self):
+        self.assertEqual(
+            core.answer_example({"type": "object", "keys": ["k", "n"]}),
+            '{"k": <value>, "n": <value>}',
+        )
+
+    def test_scalar_example(self):
+        self.assertEqual(core.answer_example({"type": "number"}), "<number>")
+
+    def test_array_without_a_length(self):
+        self.assertIn("...", core.answer_example({"type": "array"}))
+
+
+class TestPromptSources(TempProblems):
+    def test_a_folder_with_only_an_oracle_is_discovered(self):
+        # The Create Problem form can supply the prompt instead of problem.md.
+        directory = write_problem(
+            self.root, "formprompt", "class Oracle:\n    def query(self, m, **k):\n        return 1\n", {"answer": 1}
+        )
+        (directory / "problem.md").unlink()
+        self.assertIn("formprompt", core.discover_problems([self.root]))
+        self.assertEqual(self.session("formprompt").problem.prompt, "")
+
+    def test_a_folder_with_neither_marker_is_ignored(self):
+        (self.root / "empty").mkdir()
+        self.assertEqual(core.discover_problems([self.root]), {})
+
+
 class TestActionNormalisation(unittest.TestCase):
     def test_shorthand_declarations(self):
         action = core._normalise_action({"name": "f", "params": {"x": "integer", "y": int}})

@@ -119,10 +119,38 @@ class TestScaffoldHooks(ServerTestCase):
         for name in ("setup_problem", "grade_problem", "describe_oracle", "submit_answer"):
             self.assertIn(name, self.srv.mcp.tools)
 
-    def test_setup_problem_returns_the_prompt(self):
+    def test_setup_problem_returns_the_prompt_with_the_tool_guide(self):
         prompt = self.srv.setup_problem("demo")
-        self.assertEqual(prompt, "Recover the hidden values.")
+        self.assertTrue(prompt.startswith("Recover the hidden values."))
+        self.assertIn("Using your tools", prompt)
         self.assertEqual(self.srv.state.session.problem.problem_id, "demo")
+
+    def test_tool_guide_documents_the_query_convention_in_generic_mode(self):
+        prompt = self.srv.setup_problem("demo")
+        self.assertIn('query(action="evaluate"', prompt)
+        self.assertIn("submit_answer", prompt)
+        self.assertIn("Query budget: 3", prompt)
+
+    def test_tool_guide_can_be_suppressed(self):
+        prompt = self.srv.setup_problem("demo", extra_fields={"append_tool_guide": False})
+        self.assertEqual(prompt, "Recover the hidden values.")
+
+    def test_task_prompt_from_the_form_overrides_problem_md(self):
+        prompt = self.srv.setup_problem("demo", extra_fields={"task_prompt": "From the form."})
+        self.assertTrue(prompt.startswith("From the form."))
+        self.assertNotIn("Recover the hidden values.", prompt)
+
+    def test_a_problem_folder_without_problem_md_is_still_servable(self):
+        directory = write_problem(self.root, "noprompt", SIMPLE_ORACLE, {"answer": [5, 2]})
+        (directory / "problem.md").unlink()
+        prompt = self.srv.setup_problem("noprompt", extra_fields={"task_prompt": "Form text."})
+        self.assertTrue(prompt.startswith("Form text."))
+
+    def test_a_problem_with_no_prompt_anywhere_is_an_error(self):
+        directory = write_problem(self.root, "silent", SIMPLE_ORACLE, {"answer": [5, 2]})
+        (directory / "problem.md").unlink()
+        with self.assertRaisesRegex(ValueError, "no task prompt"):
+            self.srv.setup_problem("silent")
 
     def test_setup_problem_rejects_an_unknown_id(self):
         with self.assertRaises(core.ProblemNotFound):
@@ -294,7 +322,14 @@ class TestBoundMode(ServerTestCase):
 
     def test_bound_container_accepts_the_matching_setup_call(self):
         self.srv.state.bound_problem_id = "demo"
-        self.assertEqual(self.srv.setup_problem("demo"), "Recover the hidden values.")
+        prompt = self.srv.setup_problem("demo")
+        self.assertTrue(prompt.startswith("Recover the hidden values."))
+
+    def test_bound_mode_guide_names_the_tools_directly(self):
+        self.srv.state.bound_problem_id = "demo"
+        prompt = self.srv.setup_problem("demo")
+        self.assertIn("`evaluate(x=<integer>)`", prompt)
+        self.assertNotIn('query(action="evaluate"', prompt)
 
 
 class TestStartupResolution(ServerTestCase):

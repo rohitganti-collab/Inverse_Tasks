@@ -121,7 +121,12 @@ def discover_problems(roots: Optional[Iterable[os.PathLike | str]] = None) -> di
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith(_RESERVED_PREFIXES):
                 continue
-            if not (child / "problem.md").is_file():
+            # Either marker identifies a problem folder. `oracle/setup.py` alone
+            # is enough because an expert using the Create Problem form may keep
+            # the prompt in the form's Task Prompt field instead of problem.md.
+            if not (child / "problem.md").is_file() and not (
+                child / "oracle" / "setup.py"
+            ).is_file():
                 continue
             found.setdefault(child.name, child)
     return found
@@ -350,7 +355,13 @@ class Problem:
 
     @property
     def prompt(self) -> str:
-        return (self.directory / "problem.md").read_text()
+        """The task text from problem.md, or "" if the prompt comes from Taiga.
+
+        Empty is legitimate: an expert filling in the Create Problem form may
+        supply the prompt there, in which case it arrives via extra_fields.
+        """
+        path = self.directory / "problem.md"
+        return path.read_text() if path.is_file() else ""
 
     @property
     def title(self) -> str:
@@ -898,6 +909,112 @@ def load_session(
     """Load a problem and start a fresh attempt against a brand-new oracle."""
     directory = resolve_problem_dir(problem_id, roots)
     return Session(Problem(problem_id, directory))
+
+
+# --------------------------------------------------------------------------- #
+# Prompt tool guide
+# --------------------------------------------------------------------------- #
+
+# Placeholder rendering for parameter and answer types. Types only — a guide that
+# echoed real values would hand the model the answer.
+_TYPE_PLACEHOLDER = {
+    "integer": "<integer>",
+    "number": "<number>",
+    "string": "<string>",
+    "boolean": "<true|false>",
+    "array": "<array>",
+    "object": "<object>",
+}
+
+
+def answer_example(shape: dict[str, Any]) -> str:
+    """A shape-only example submission, e.g. `[<integer>, <integer>]`."""
+    kind = shape.get("type", "string")
+    if kind == "array":
+        length = shape.get("length")
+        item_types = shape.get("item_types") or ["integer"]
+        if not isinstance(length, int) or length <= 0:
+            return f"[{_TYPE_PLACEHOLDER.get(item_types[0], '<value>')}, ...]"
+        items = [
+            _TYPE_PLACEHOLDER.get(item_types[min(i, len(item_types) - 1)], "<value>")
+            for i in range(length)
+        ]
+        return "[" + ", ".join(items) + "]"
+    if kind == "object":
+        keys = shape.get("keys") or ["key"]
+        return "{" + ", ".join(f'"{k}": <value>' for k in keys) + "}"
+    return _TYPE_PLACEHOLDER.get(kind, "<value>")
+
+
+def _call_example(action: dict[str, Any], mode: str) -> str:
+    params = action["params"]
+    if mode == "named":
+        args = ", ".join(
+            f"{p['name']}={_TYPE_PLACEHOLDER.get(p['type'], '<value>')}" for p in params
+        )
+        return f"`{action['name']}({args})`"
+    if not params:
+        return f'`query(action="{action["name"]}")`'
+    rendered = ", ".join(
+        f'"{p["name"]}": {_TYPE_PLACEHOLDER.get(p["type"], "<value>")}' for p in params
+    )
+    return f'`query(action="{action["name"]}", params={{{rendered}}})`'
+
+
+def render_tool_guide(session: "Session", mode: str = "query") -> str:
+    """Generate the calling contract appended to a problem's prompt.
+
+    Experts write the science in `problem.md`; this guarantees the *mechanics*
+    the model is told are the mechanics actually published, which is otherwise
+    the easiest thing in the whole setup to get out of sync.
+    """
+    problem = session.problem
+    lines = ["---", "", "## Using your tools", ""]
+
+    if problem.actions:
+        if mode == "named":
+            lines.append(
+                "Probe the black box with these tools. Where the task above names an "
+                "operation, this is how you call it:"
+            )
+        else:
+            lines.append(
+                "Probe the black box with the **`query`** tool. Where the task above "
+                "names an operation, call it through `query` like this:"
+            )
+        lines += ["", "| Call | What it does | Budget |", "| --- | --- | --- |"]
+        for action in problem.actions:
+            cost = "costs 1 query" if action["costs_budget"] else "free"
+            description = " ".join(action["description"].split())
+            optional = [p["name"] for p in action["params"] if not p["required"]]
+            if optional:
+                description += f" (optional: {', '.join(optional)})"
+            lines.append(f"| {_call_example(action, mode)} | {description} | {cost} |")
+    else:
+        lines.append(
+            "Probe the black box with the **`query`** tool: `query(action=<string>, "
+            "params=<object>)`. The task above states which operations exist."
+        )
+
+    shape = problem.answer_shape()
+    lines += [
+        "",
+        f"- **`submit_answer(answer)`** — record your final answer as JSON: "
+        f"`{answer_example(shape)}`. You may resubmit; only your last submission is graded.",
+        "- **`describe_oracle()`** — re-read this list and check your remaining budget. Free.",
+    ]
+
+    if problem.budget_total is not None:
+        free = [a["name"] for a in problem.actions if not a["costs_budget"]]
+        note = (
+            f"\n**Query budget: {problem.budget_total} call(s).** "
+            "Calls marked free above do not count against it."
+            if free
+            else f"\n**Query budget: {problem.budget_total} call(s).**"
+        )
+        lines.append(note)
+
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #

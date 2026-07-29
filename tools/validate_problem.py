@@ -439,6 +439,34 @@ def _answer_literals_in(text: str, answer: Any) -> list[str]:
     return hits
 
 
+def taiga_form_values(problem_id: str, directory: Path) -> str:
+    """The exact values to type into Taiga's Create Problem form."""
+    has_prompt = (directory / "problem.md").is_file()
+    prompt_note = (
+        "paste the contents of problem.md (the container appends the tool "
+        "instructions automatically)"
+        if has_prompt
+        else "write the task prompt here — this problem folder has no problem.md"
+    )
+    return "\n".join(
+        [
+            f"\n--- Taiga Create Problem form values for {problem_id} ---",
+            f"  Problem ID        {problem_id}",
+            f"  Task Prompt       {prompt_note}",
+            "  Tools             (LEAVE EMPTY)",
+            "                    Giving the model bash or str_replace_editor lets it read",
+            "                    oracle/setup.py and golden/expected.json straight off disk.",
+            "  Grading Strategy  mcp   (NOT the default Rubric (Itemwise) — that ignores",
+            "                    your golden answer and asks an LLM to judge the transcript)",
+            "  Docker Image      the published inverse-tasks image",
+            "  Startup Command   python -u /app/mcp_server/server.py",
+            f"  Preloaded Files   mount this folder at /mnt/problems/{problem_id}/",
+            "                    (ship problem.md, oracle/, golden/ — never solution/)",
+            "  Tell model about uploaded files   OFF",
+        ]
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("problem_ids", nargs="*", help="Problem ids to check (default: all)")
@@ -447,6 +475,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="append",
         default=None,
         help="Override where problems are searched for (repeatable)",
+    )
+    parser.add_argument(
+        "--no-form-values",
+        action="store_true",
+        help="Skip printing the Taiga Create Problem form values for passing problems",
     )
     args = parser.parse_args(argv)
 
@@ -468,6 +501,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     reports = [validate(pid, available[pid], roots) for pid in targets]
     for report in reports:
         print(report.render())
+        if not report.failed and not args.no_form_values:
+            print(taiga_form_values(report.problem_id, available[report.problem_id]))
 
     failures = [r.problem_id for r in reports if r.failed]
     warnings = sum(1 for r in reports for status, _, _ in r.rows if status == WARN)

@@ -113,8 +113,33 @@ def setup_problem(
         f"budget={session.problem.budget_total})"
     )
 
-    prompt = session.problem.prompt
     extras = dict(extra_fields or {})
+
+    # The prompt may come from Taiga's Task Prompt field (passed through
+    # extra_fields) or from the problem folder's problem.md. The form wins when
+    # both exist, so an expert can edit the prompt in the UI without touching
+    # the mounted files.
+    prompt = ""
+    for key in ("task_prompt", "prompt", "problem_statement"):
+        if isinstance(extras.get(key), str) and extras[key].strip():
+            prompt = extras[key]
+            break
+    if not prompt.strip():
+        prompt = session.problem.prompt
+    if not prompt.strip():
+        raise ValueError(
+            f"Problem {problem_id!r} has no task prompt: add a problem.md to the "
+            "problem folder, or fill in the Task Prompt field so it arrives in "
+            "extra_fields."
+        )
+
+    # Append the calling contract, generated from the oracle. The expert writes
+    # the science; this keeps the mechanics the model is told identical to the
+    # mechanics actually published, whichever mode the server is in.
+    if extras.get("append_tool_guide", True):
+        mode = "named" if state.bound_problem_id else "query"
+        prompt = f"{prompt.rstrip()}\n\n{core.render_tool_guide(session, mode)}\n"
+
     for suffix_key in ("prompt_suffix", "task_prompt_suffix"):
         if extras.get(suffix_key):
             prompt = f"{prompt}\n\n{extras[suffix_key]}"

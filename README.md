@@ -12,13 +12,24 @@ solvers and the answer key; the engine reads whatever their oracle declares and
 publishes exactly that to the model. Adding a task is adding a folder — no
 server or Docker changes.
 
+Experts never build the image. It is published once, then each new task is a
+folder they upload as Preloaded Files:
+
 ```bash
-cp -r problems/_template problems/my-problem-id   # 1. author
-python3 tools/validate_problem.py my-problem-id   # 2. validate
-docker build -t inverse-tasks:local .             # 3. build & push
+cp -r problems/_template problems/my-problem-id   # 1. write 4 files
+python3 tools/validate_problem.py my-problem-id   # 2. validate + print form values
+# 3. upload the folder to /mnt/problems/my-problem-id/ and fill in 5 form fields
 ```
 
-Full contract: **[docs/AUTHORING.md](docs/AUTHORING.md)**.
+- **[docs/EXPERT_WORKFLOW.md](docs/EXPERT_WORKFLOW.md)** — start here: what to
+  write, and exactly what to put in Taiga's Create Problem form.
+- **[docs/AUTHORING.md](docs/AUTHORING.md)** — the full engineering contract.
+
+> Two Create Problem defaults will silently ruin an inverse task: the **Tools**
+> field arrives pre-filled with `bash`, which lets the model read the oracle and
+> the answer key off disk, and **Grading Strategy** defaults to
+> `Rubric (Itemwise)`, which ignores `golden/expected.json` in favour of an LLM
+> judge. Clear the first, set the second to `mcp`.
 
 ## Layout
 
