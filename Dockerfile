@@ -1,10 +1,16 @@
 # Generic runtime for Inverse Task problems, served to Taiga over MCP (stdio).
-# One image serves every problem under problems/<problem_id>/ — see mcp_server/server.py.
+#
+# The image is oracle-agnostic: it ships an engine that reads whatever problems
+# live under problems/<problem_id>/ and exposes exactly the probe surface each
+# expert's oracle declares. Adding a task means adding a folder — no changes
+# here. See docs/AUTHORING.md.
 FROM python:3.11-slim
 
-# Taiga's low-level container requirements (see wiki: onboarding/01_welcome.md
-# "Low-Level Image Requirements"): bash/sh/coreutils/procps/util-linux tools in
-# PATH, `python` resolvable as a binary, and a few paths present even if empty.
+# Taiga's low-level container requirements (wiki: onboarding/01_welcome.md,
+# "Low-Level Image Requirements for Running a Container in Taiga"):
+# bash/sh, free, grep, lscpu, uptime, cat, find on PATH; `python` resolvable as
+# a binary; and /etc/ssl/certs, /usr/local/share/ca-certificates/custom-ca.crt,
+# /workdir present even if empty.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
         coreutils \
@@ -23,29 +29,38 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Only the runtime surface for each problem is copied in — never the
-# authoring/calibration artifacts (BRIEF.md, STATE.md, reasoning_trap.md,
-# solution/) that name the intended solver or the trap. The model has no
-# filesystem-access tool in this environment, but the oracle's hidden
-# constants and the trap writeup still shouldn't ship in the image.
 COPY mcp_server/ /app/mcp_server/
+COPY tools/ /app/tools/
 
-# Copy each problem's runtime files explicitly (problem.md, oracle/, golden/).
-COPY problems/ /app/problems_src/
-RUN mkdir -p /app/problems && \
-    for d in /app/problems_src/*/; do \
-        pid=$(basename "$d"); \
-        mkdir -p "/app/problems/$pid/oracle" "/app/problems/$pid/golden"; \
-        cp "$d/problem.md" "/app/problems/$pid/problem.md"; \
-        cp "$d/oracle/setup.py" "/app/problems/$pid/oracle/setup.py"; \
-        cp "$d/golden/expected.json" "/app/problems/$pid/golden/expected.json"; \
-    done && \
-    rm -rf /app/problems_src
+# Ship only each problem's runtime subset. collect_problems.py is an allowlist
+# (problem.md, config.yaml, oracle/, golden/, grader/*.py), so the intended
+# solver, the shortcut/trap solver, the near-miss table, and the calibration
+# notes never enter the image even if an expert adds new authoring files.
+COPY docker/collect_problems.py /tmp/collect_problems.py
+COPY problems/ /tmp/problems_src/
+RUN python /tmp/collect_problems.py /tmp/problems_src /app/problems \
+    && rm -rf /tmp/problems_src /tmp/collect_problems.py \
+    && find /app -name '__pycache__' -type d -prune -exec rm -rf {} + \
+    && python -c "import sys; sys.path.insert(0, '/app/mcp_server'); import core; \
+ps = core.discover_problems(['/app/problems']); print('baked problems:', sorted(ps)); \
+assert ps, 'no problems in image'"
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Taiga ignores image ENTRYPOINT/CMD and runs the problem's `startup_command`
-# instead (see wiki: features/container_runtimes.md) — set that field to
-# "python -u /app/mcp_server/server.py" in your problems-metadata JSON.
-# CMD below is only so `docker run <image>` works for local smoke-testing.
+# Extra directories searched for problems, ahead of the baked-in ones. Lets a
+# Taiga `preloaded_files` mount add or override a problem without a rebuild —
+# mount the problem folder at /mnt/problems/<problem_id>/.
+ENV INVERSE_TASKS_PROBLEM_DIRS=/mnt/problems:/app/problems
+
+# Taiga ignores the image ENTRYPOINT/CMD and runs the problem's
+# `startup_command` instead (wiki: features/container_runtimes.md). Set that to:
+#
+#   python -u /app/mcp_server/server.py --problem-id <your-problem-id>
+#
+# Passing --problem-id puts the server in "bound mode", where each action the
+# oracle declares becomes a first-class MCP tool (evaluate, help, ...) instead
+# of the generic query(action, params). Omit it and the server still works, it
+# just publishes the generic surface. CMD below only makes `docker run` usable
+# for local smoke-testing.
 CMD ["python", "-u", "/app/mcp_server/server.py"]

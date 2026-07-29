@@ -1,11 +1,18 @@
 .git
+.gitignore
 __pycache__/
 *.pyc
+tests/
+docs/
 
-# Authoring/calibration artifacts — never bake these into the image, they
-# name the intended solver and the trap the task is testing for.
+# Authoring and calibration artifacts. docker/collect_problems.py already
+# allowlists what enters the image, so this is belt-and-braces: it also keeps
+# the answer-adjacent files out of the build context entirely.
 problems/*/BRIEF.md
 problems/*/STATE.md
 problems/*/reasoning_trap.md
 problems/*/solution/
+problems/*/grader/grading_guide.md
 sample_experts_instructions.md
+problems-metadata.example.json
+README.md

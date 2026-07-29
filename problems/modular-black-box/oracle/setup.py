@@ -15,6 +15,44 @@ class Oracle:
     _A = 23         # hidden
     _B = 58         # hidden
 
+    # The probe surface handed to the solver. The engine turns each entry into a
+    # tool the model can call, so these names/descriptions must match what
+    # problem.md promises — and must not hint at the method or the trap.
+    #
+    # `sample` is intentionally absent: problem.md documents only two ways to
+    # call the box, so the noisy mode stays unexposed.
+    ACTIONS = [
+        {
+            "name": "evaluate",
+            "description": "Return the box's output for your chosen integer x.",
+            "params": {
+                "x": {"type": "integer", "description": "The input to the box.", "required": True}
+            },
+            "costs_budget": True,
+        },
+        {
+            "name": "help",
+            "description": "Return a general hint. It will never tell you a or b.",
+            "params": {
+                "question": {
+                    "type": "string",
+                    "description": "What you want a hint about.",
+                    "default": "",
+                }
+            },
+            "costs_budget": False,
+        },
+    ]
+
+    # Shape only — never the values. Drives submit_answer's format feedback.
+    ANSWER_SCHEMA = {
+        "type": "array",
+        "length": 2,
+        "item_types": ["integer"],
+        "keys": ["a", "b"],
+        "description": "The pair (a, b), in that order.",
+    }
+
     def __init__(self):
         self._used = 0
         self._rng = random.Random(42)  # seeded: deterministic noise for the 'sample' mode
@@ -23,6 +61,15 @@ class Oracle:
         if self._used >= self.BUDGET:
             raise RuntimeError("Query budget exceeded (6 query calls).")
         self._used += 1
+
+    # Thin wrappers so each declared ACTION is directly serviceable with the
+    # parameters it declares. query() below remains the implementation and the
+    # interface solution/*.py use.
+    def evaluate(self, x):
+        return self.query("evaluate", x=x)
+
+    def help(self, question=""):
+        return self.query("help")
 
     def query(self, mode, x=None):
         if mode in ("evaluate", "sample") and x is None:

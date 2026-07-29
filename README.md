@@ -1,78 +1,129 @@
 # Inverse_Tasks
 
-Inverse tasks sample environment for Taiga.
+A Taiga RL environment for **inverse tasks**: a model is given a black-box
+oracle it can only probe through a tight budget of tool calls, and must recover
+the hidden cause (constants, parameters, a mechanism) that explains what it
+observes. Each task is built so that a competent solver can fail in one
+specific, predictable way — see `sample_experts_instructions.md` for the
+authoring method.
 
-Each problem gives a model a black-box "oracle" it can only query through a
-tight budget of tool calls, and asks it to recover a hidden cause (constants,
-parameters, etc.) that provably explains the oracle's behavior. See
-`sample_experts_instructions.md` for how a new inverse task is authored.
+The container is **oracle-agnostic**. Experts write the prompt, the oracle, the
+solvers and the answer key; the engine reads whatever their oracle declares and
+publishes exactly that to the model. Adding a task is adding a folder — no
+server or Docker changes.
+
+```bash
+cp -r problems/_template problems/my-problem-id   # 1. author
+python3 tools/validate_problem.py my-problem-id   # 2. validate
+docker build -t inverse-tasks:local .             # 3. build & push
+```
+
+Full contract: **[docs/AUTHORING.md](docs/AUTHORING.md)**.
 
 ## Layout
 
 ```
-Dockerfile              # generic runtime, serves every problem below over MCP
-mcp_server/server.py     # setup_problem / evaluate / help / submit_answer / grade_problem
+Dockerfile                      generic runtime; ships every problem below
+requirements.txt                mcp, pydantic
+mcp_server/
+  core.py                       the engine — oracle loading, action
+                                normalisation, budget, grading. Stdlib only.
+  server.py                     thin MCP layer: decides which tools the model sees
+docker/collect_problems.py      allowlists each problem's runtime files into the image
+tools/validate_problem.py       pre-flight checks for an authored problem
+tests/                          engine + server suites, no third-party deps needed
 problems/
-  modular-black-box/
-    problem.md           # task prompt shown to the model
-    config.yaml          # display metadata (direction, domain, title)
-    oracle/setup.py       # hidden Oracle — never shipped to the model directly
-    golden/expected.json  # graded answer + tolerance
-    grader/grading_guide.md   # human-readable grading notes (not read by code)
-    BRIEF.md, STATE.md, reasoning_trap.md, solution/   # authoring/calibration
-                                                        # only — excluded from
-                                                        # the Docker image
+  _template/                    copy this to start a task (never served)
+  modular-black-box/            the sample task
 ```
 
-One image serves any number of problems: drop a new folder under `problems/`
-with the same five-piece contract (`problem.md`, `oracle/setup.py` exposing a
-`query(mode, x=None)` method, `golden/expected.json`) and it's runnable
-immediately — no server code changes needed.
+Per problem, only `problem.md`, `config.yaml`, `oracle/`, `golden/expected.json`
+and `grader/*.py` enter the image. The intended solver, the trap solver, the
+near-miss table and the calibration notes stay out — by allowlist, so a new
+authoring file is excluded by default rather than shipped next to the answer key.
+
+## The oracle contract, in brief
+
+`problems/<id>/oracle/setup.py` defines a class named `Oracle`. Declare the
+probe surface and the engine turns each entry into a tool:
+
+```python
+class Oracle:
+    BUDGET = 6
+    ACTIONS = [
+        {"name": "evaluate",
+         "description": "Return the box's output for your chosen integer x.",
+         "params": {"x": {"type": "integer", "required": True}}},
+        {"name": "help",
+         "description": "Return a general hint.",
+         "params": {"question": {"type": "string", "default": ""}},
+         "costs_budget": False},
+    ]
+    def evaluate(self, x): ...
+    def help(self, question=""): ...
+```
+
+Undeclared oracles still work: the engine falls back to introspecting public
+methods, then to forwarding through a single `query(mode, **params)`. Declaring
+`ACTIONS` is preferred — it's what gives the model tools named the way your
+prompt names them, with validated parameters.
+
+Budget, parameter checking, answer parsing, grading, and leakage containment are
+handled once, identically for every problem.
 
 ## Container interface
 
-The image runs an MCP server over stdio exposing Taiga's required hooks plus
-the model-facing tools:
+The image runs an MCP server over stdio. Taiga's scaffold hooks are hidden from
+the model automatically; the rest is what the model can call.
 
-- `setup_problem(problem_id, use_hinted_problem, extra_fields)` — loads
-  `problems/<problem_id>/oracle/setup.py`, instantiates a fresh `Oracle`, and
-  returns `problem.md` as the prompt.
-- `evaluate(x)` / `help(question)` — the only way the model touches the
-  oracle; both go through `Oracle.query(...)`, so the hidden constants and
-  the intended/shortcut solvers under `solution/` never reach the model.
-- `submit_answer(a, b)` — records the model's final answer.
-- `grade_problem(problem_id, transcript, extra_fields)` — compares the last
-  submission against `golden/expected.json` (exact match within `tolerance`).
+| Tool | Visibility | Purpose |
+| --- | --- | --- |
+| `setup_problem` | hidden | Fresh oracle for `problem_id`; returns `problem.md`. |
+| `grade_problem` | hidden | Scores the submission against `golden/expected.json`. |
+| `list_problems` | hidden | Which problem ids this image serves. |
+| *your declared actions* | model | One tool per `ACTIONS` entry, in bound mode. |
+| `query(action, params)` | model | The generic probe, in generic mode. |
+| `describe_oracle()` | model | Available actions, budget remaining, answer shape. Free. |
+| `submit_answer(answer)` | model | Final answer as JSON; resubmission allowed. |
 
-`setup_problem` and `grade_problem` are hidden from the model automatically
-(Taiga's reserved-hook filtering); the model only ever sees `evaluate`,
-`help`, and `submit_answer`.
+**Bound vs generic mode.** MCP publishes its tool list during the initialize
+handshake, *before* Taiga says which problem is running — so per-problem tool
+names only exist if the problem is known at startup. Pass `--problem-id` (or
+`$PROBLEM_ID`, or ship exactly one problem) and the server binds at startup and
+publishes your named actions. Otherwise it publishes `query(action, params)` and
+the model discovers the surface via `describe_oracle()`. Both paths are tested.
 
-## Build
+## Develop and test
 
 ```bash
+python3 -m unittest discover -s tests    # engine + server suites (no mcp needed)
+python3 tools/validate_problem.py        # validate every authored problem
 docker build -t inverse-tasks:local .
+docker run --rm -i inverse-tasks:local   # stdio smoke test
 ```
 
-## Test locally
-
-Smoke-test the MCP server without Taiga:
-
-```bash
-docker run --rm -i inverse-tasks:local
-```
-
-To exercise it against Taiga's actual agent harness without pushing to a
-registry, use the local tunnel CLI (see the Taiga wiki's `local_tunnel.md`):
+To drive it with Taiga's real agent harness without pushing an image, use the
+local tunnel (see the Taiga wiki, `features/local_tunnel.md`):
 
 ```bash
 taiga-local-tunnel start --dockerfile ./Dockerfile \
-  --startup-command "python -u /app/mcp_server/server.py" \
+  --startup-command "python -u /app/mcp_server/server.py --problem-id modular-black-box" \
   --problem-id modular-black-box
 ```
 
-## Push and register
+## Registering on Taiga
 
-Tag and push to your org's registry, then reference the image in a
-problems-metadata file (see `problems-metadata.example.json`) when creating a
-job or registering a problem version in Taiga.
+Push the image, then create a problem pointing at it — see
+`problems-metadata.example.json`. Two settings are easy to get wrong:
+
+- **Grading strategy must be `mcp`.** The Create Problem form defaults to
+  `Rubric (Itemwise)`, which sends the transcript to an LLM judge and ignores
+  your golden answer.
+- **`startup_command` should pass `--problem-id`**, otherwise the model gets the
+  generic `query()` surface rather than the tools your prompt names.
+
+`required_tools` is normally empty — the model needs the oracle, not bash.
+
+To iterate without rebuilding, mount a problem folder at
+`/mnt/problems/<problem_id>/` via `preloaded_files`; that path is searched ahead
+of the baked-in problems (`INVERSE_TASKS_PROBLEM_DIRS`).

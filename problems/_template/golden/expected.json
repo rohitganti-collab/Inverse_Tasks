@@ -1,6 +1,6 @@
 {
-  "answer": [23, 58],
+  "answer": [42],
   "tolerance": 0,
-  "keys": ["a", "b"],
+  "keys": ["secret"],
   "scoring": "binary"
 }

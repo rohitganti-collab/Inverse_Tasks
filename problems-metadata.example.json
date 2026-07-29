@@ -1,23 +1,38 @@
 {
+  "_comment": [
+    "Example Taiga problems-metadata for this image. One entry per inverse task.",
+    "Replace `image` with your pushed tag (never `latest`).",
+    "startup_command: pass --problem-id so the oracle's declared actions become",
+    "first-class tools (evaluate, help, ...) instead of the generic query().",
+    "Set the problem's grading strategy to `mcp` in Taiga, not the default",
+    "Rubric (Itemwise) — these tasks are graded deterministically by",
+    "grade_problem inside the container against golden/expected.json.",
+    "required_tools is empty on purpose: the model needs the oracle tools only,",
+    "and withholding bash means it cannot read the container filesystem."
+  ],
   "problem_set": {
     "owner": "rohit.ganti",
     "name": "inverse-tasks",
     "description": "Inverse tasks: recover a hidden cause by querying a budgeted oracle.",
     "version": "1.0.0",
+    "required_resources": "2vcpu+6gib",
     "problems": [
       {
         "image": "<your-registry>/<your-org>/inverse-tasks:v1",
-        "startup_command": "python -u /app/mcp_server/server.py",
+        "startup_command": "python -u /app/mcp_server/server.py --problem-id modular-black-box",
         "id": "modular-black-box",
         "required_tools": [],
         "scratchpad": "allowed",
+        "enabled_package_managers": [],
         "setup_timeout_seconds": 60,
         "startup_timeout_seconds": 60,
         "tool_timeout_seconds": 30,
         "grading_timeout_seconds": 60,
+        "container_runtime": "gvisor",
         "metadata": {
           "task_type": "inverse-task",
-          "difficulty": "medium"
+          "direction": "inverse",
+          "domain": "Samples"
         }
       }
     ]
