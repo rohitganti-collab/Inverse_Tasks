@@ -143,9 +143,23 @@ is on disk inside the environment.
 The container searches `/mnt/problems` *before* its built-in problems, so a
 mounted folder is picked up immediately and can also override a baked-in task.
 
-> The **Upload Supporting Files** box next to it is a different thing — remote
-> storage, *not* mounted into the container. That's the right home for reviewer
-> material (your uniqueness argument, calibration notes), not for the oracle.
+### The two upload boxes are not interchangeable
+
+They sit next to each other and only one reaches the container:
+
+| Box | Where the files go | Use it for |
+| --- | --- | --- |
+| **Preloaded Files → Mount files** | *mounted into the container at run time* | ✅ your oracle, golden answer, problem.md |
+| **Upload Supporting Files** | remote storage, **never mounted** | reviewer material: uniqueness argument, calibration notes, near-miss table |
+
+Read the second box's help text carefully — it says *"use for reference
+materials like golden answers that humans need to review."* That means golden
+answers **for human reviewers**, not the `golden/expected.json` the grader reads.
+Put your answer key there and the container never sees it: `setup_problem` fails
+with "No problems found", because nothing was mounted.
+
+If you hit that error, this is almost certainly why — the message says so
+explicitly.
 
 ---
 

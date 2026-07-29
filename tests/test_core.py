@@ -505,6 +505,16 @@ class TestDiscovery(TempProblems):
         with self.assertRaisesRegex(core.ProblemNotFound, "only"):
             core.load_session("missing", [self.root])
 
+    def test_nothing_mounted_explains_the_two_upload_boxes(self):
+        # The likeliest cause of an empty problems root is uploading through
+        # "Upload Supporting Files" instead of "Preloaded Files".
+        with self.assertRaises(core.ProblemNotFound) as caught:
+            core.load_session("my-task", [self.root])
+        message = str(caught.exception)
+        self.assertIn("Preloaded Files", message)
+        self.assertIn("Upload Supporting Files", message)
+        self.assertIn("my-task", message)
+
     def test_earlier_roots_win_on_collision(self):
         # Mirrors a preloaded-files mount shadowing a baked-in problem.
         overlay = Path(tempfile.mkdtemp(prefix="inverse-overlay-"))

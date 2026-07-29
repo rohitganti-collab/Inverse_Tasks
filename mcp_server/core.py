@@ -136,10 +136,31 @@ def resolve_problem_dir(
     problem_id: str, roots: Optional[Iterable[os.PathLike | str]] = None
 ) -> Path:
     problems = discover_problems(roots)
-    if problem_id not in problems:
-        known = ", ".join(sorted(problems)) or "<none>"
-        raise ProblemNotFound(f"Unknown problem_id {problem_id!r}. Available: {known}")
-    return problems[problem_id]
+    if problem_id in problems:
+        return problems[problem_id]
+
+    searched = [str(p) for p in problem_roots(roots)]
+    if problems:
+        raise ProblemNotFound(
+            f"Unknown problem_id {problem_id!r}. Available: {', '.join(sorted(problems))}. "
+            f"Searched: {searched}. The Problem ID field must match the mounted "
+            "folder name exactly."
+        )
+
+    # Nothing found anywhere. By far the most common cause is the two
+    # similarly-named upload boxes on Taiga's Create Problem form: only
+    # "Preloaded Files" is mounted into the container. "Upload Supporting Files"
+    # says it is for "golden answers", but those stay in remote storage for human
+    # reviewers and never reach the filesystem the grader reads.
+    raise ProblemNotFound(
+        f"No problems found for {problem_id!r} — searched {searched} and found none.\n"
+        f"Expected a folder at <root>/{problem_id}/ containing problem.md and/or "
+        "oracle/setup.py.\n"
+        "If you uploaded the problem folder through Taiga: use **Preloaded Files "
+        "-> Mount files** (mounted into the container at run time), not **Upload "
+        "Supporting Files** (remote storage only, never mounted — despite its "
+        "mention of golden answers, that box is for material humans review)."
+    )
 
 
 # --------------------------------------------------------------------------- #
