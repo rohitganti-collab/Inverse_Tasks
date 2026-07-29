@@ -1,2 +1,5 @@
-mcp>=1.2.0
-pydantic>=2.0
+# Pinned to a major range: FastMCP's decorator/add_tool surface is what the
+# server builds on, and an unbounded `mcp` could pull a breaking 2.x at build
+# time. Bump deliberately and let `--selftest` (run during docker build) confirm.
+mcp>=1.2,<2
+pydantic>=2.0,<3

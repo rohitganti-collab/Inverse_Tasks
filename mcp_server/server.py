@@ -53,6 +53,7 @@ class Grade(BaseModel):
     env_internal_failure: Optional[bool] = None
     env_internal_failure_logs: Optional[list[str]] = None
     penalties: Optional[dict[str, float]] = None
+    allow_unbounded: bool = False
 
 
 class _State:
@@ -230,13 +231,29 @@ def submit_answer(answer: str) -> str:
     return message
 
 
-def _generic_query(action: str, params: Optional[dict] = None) -> str:
+@mcp.tool()
+def query(action: str, params: Optional[dict] = None) -> str:
+    """Probe the black box.
+
+    `action` names the operation and `params` is a JSON object of that action's
+    arguments, e.g. action="evaluate", params={"x": 0}. Call `describe_oracle`
+    to see which actions exist, what parameters they take, and which spend query
+    budget.
+
+    This is the primary way to query the black box. It is registered with the
+    same decorator as the scaffold hooks rather than added dynamically, so the
+    critical path does not depend on any particular FastMCP `add_tool` signature.
+    """
     session = state.require()
     try:
         observation = session.query(action, params or {})
     except core.InverseTaskError as exc:
         return f"Error: {exc}"
     return _dump(observation)
+
+
+# Alias kept for the dynamically-synthesised named tools to dispatch through.
+_generic_query = query
 
 
 # --------------------------------------------------------------------------- #
@@ -259,36 +276,129 @@ def register_bound_tools(session: core.Session) -> bool:
     return True
 
 
-def register_generic_tools() -> None:
-    mcp.add_tool(
-        _generic_query,
-        name="query",
-        description=(
-            "Probe the black box. `action` names the operation (call "
-            "`describe_oracle` to see which actions exist and what parameters "
-            "they take); `params` is a JSON object of that action's arguments, "
-            'e.g. action="evaluate", params={"x": 0}. Budgeted actions spend '
-            "one unit of your query budget per call."
-        ),
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Startup
 # --------------------------------------------------------------------------- #
 
 
 def resolve_startup_problem(explicit: Optional[str]) -> Optional[str]:
-    """Decide whether this container is bound to one problem at startup."""
+    """The problem to bind to at startup, or None to stay in query mode.
+
+    Deliberately does *not* auto-select when only one problem happens to be
+    present: the published surface must depend on flags, not on how many problem
+    folders a container happens to have mounted, or a task's tools would change
+    the moment a second problem appeared beside it.
+    """
     if explicit:
         return explicit
-    env = os.environ.get("PROBLEM_ID") or os.environ.get("INVERSE_TASKS_PROBLEM_ID")
-    if env:
-        return env
+    return os.environ.get("PROBLEM_ID") or os.environ.get("INVERSE_TASKS_PROBLEM_ID")
+
+
+def published_tool_names() -> list[str]:
+    """Tool names the harness would receive, via the real FastMCP object."""
+    import asyncio
+
+    tools = asyncio.run(mcp.list_tools())
+    return sorted(getattr(t, "name", str(t)) for t in tools)
+
+
+def selftest(problem_id: Optional[str] = None) -> int:
+    """Exercise the whole path against the real MCP objects. Returns an exit code.
+
+    Run during `docker build`, which is the only place the genuine `mcp` package
+    is guaranteed installed — the unit tests stub it. This turns "the FastMCP
+    integration might be wrong" into a build failure rather than a mystery at
+    job time.
+    """
+    failures: list[str] = []
+
+    def check(condition: bool, description: str) -> None:
+        log(f"  {'ok  ' if condition else 'FAIL'}  {description}")
+        if not condition:
+            failures.append(description)
+
     available = core.discover_problems()
-    if len(available) == 1:
-        return next(iter(available))
-    return None
+    log(f"selftest: problems available: {sorted(available) or '<none>'}")
+    if not available:
+        log("selftest: FAIL no problems found")
+        return 1
+    problem_id = problem_id or sorted(available)[0]
+    log(f"selftest: using {problem_id!r}")
+
+    # 1. The harness can enumerate our tools, and the required surface is present.
+    try:
+        names = published_tool_names()
+        log(f"selftest: published tools: {names}")
+        for required in ("setup_problem", "grade_problem", "query", "submit_answer", "describe_oracle"):
+            check(required in names, f"tool {required!r} is published")
+    except Exception as exc:  # noqa: BLE001 - any failure here is a real defect
+        check(False, f"mcp.list_tools() works ({type(exc).__name__}: {exc})")
+
+    # 2. setup_problem returns a usable prompt including the generated guide.
+    try:
+        prompt = setup_problem(problem_id)
+        check(bool(prompt.strip()), "setup_problem returns a non-empty prompt")
+        check("Using your tools" in prompt, "prompt carries the generated tool guide")
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"setup_problem works ({type(exc).__name__}: {exc})")
+        return 1
+
+    session = state.require()
+    golden = session.problem.golden()
+
+    # 3. describe_oracle is machine-readable and hides the answer.
+    try:
+        described = json.loads(describe_oracle())
+        check("actions" in described, "describe_oracle reports actions")
+        check(
+            str(golden["answer"]) not in json.dumps(described),
+            "describe_oracle does not leak the answer",
+        )
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"describe_oracle works ({type(exc).__name__}: {exc})")
+
+    # 4. A real probe through the query tool reaches the oracle.
+    budgeted = next((a for a in session.problem.actions if a["costs_budget"]), None)
+    if budgeted:
+        sample = {"integer": 0, "number": 0.0, "string": "", "boolean": False, "array": [], "object": {}}
+        params = {
+            p["name"]: p.get("default", sample[p["type"]])
+            for p in budgeted["params"]
+            if p["required"] or "default" in p
+        }
+        before = session.calls_used
+        observation = query(budgeted["name"], params)
+        check(not observation.startswith("Error:"), f"query({budgeted['name']!r}) returns an observation")
+        check(session.calls_used == before + 1, "a budgeted query spends exactly one call")
+
+    # 5. Grading: the golden answer scores 1.0, a wrong one scores 0.0.
+    try:
+        submit_answer(json.dumps(golden["answer"]))
+        grade = grade_problem(problem_id, transcript="selftest")
+        check(grade.subscores.get("correct") == 1.0, "golden answer grades 1.0")
+        check(not grade.env_internal_failure, "grading reports no internal failure")
+        json.dumps(grade.metadata)
+        check(True, "grade metadata is JSON-serialisable")
+        weighted = sum(grade.subscores[k] * w for k, w in grade.weights.items() if k in grade.subscores)
+        check(0.0 <= weighted <= 1.0, f"weighted grade {weighted} is within [0, 1]")
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"grading the golden answer works ({type(exc).__name__}: {exc})")
+
+    try:
+        setup_problem(problem_id)  # fresh attempt
+        submit_answer('"definitely-not-the-answer"')
+        check(
+            grade_problem(problem_id).subscores.get("correct") == 0.0,
+            "a wrong answer grades 0.0",
+        )
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"grading a wrong answer works ({type(exc).__name__}: {exc})")
+
+    if failures:
+        log(f"selftest: FAILED ({len(failures)} check(s)): {failures}")
+        return 1
+    log("selftest: all checks passed")
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -297,10 +407,24 @@ def main(argv: Optional[list[str]] = None) -> None:
         "--problem-id",
         default=None,
         help=(
-            "Bind this container to one problem at startup so each of its oracle "
-            "actions becomes a first-class MCP tool. Defaults to $PROBLEM_ID, or "
-            "to the only problem present if the image ships exactly one."
+            "With --named-tools, the problem whose actions become named tools. "
+            "Also used by --selftest to pick a problem. Defaults to $PROBLEM_ID."
         ),
+    )
+    parser.add_argument(
+        "--named-tools",
+        action="store_true",
+        help=(
+            "Opt in to publishing one named MCP tool per declared oracle action "
+            "(evaluate, help, ...) instead of only the generic query tool. "
+            "Requires the problem to be known at startup via --problem-id, since "
+            "MCP sends its tool list before Taiga calls setup_problem."
+        ),
+    )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="Run an end-to-end check against the real MCP objects and exit.",
     )
     args = parser.parse_args(argv)
 
@@ -309,26 +433,30 @@ def main(argv: Optional[list[str]] = None) -> None:
     log(f"problems available: {sorted(available) or '<none>'}")
 
     problem_id = resolve_startup_problem(args.problem_id)
-    bound = False
-    if problem_id:
-        try:
-            session = core.load_session(problem_id)
-            bound = register_bound_tools(session)
-            if bound:
-                # Bind so setup_problem can reject a metadata/startup mismatch.
-                state.bound_problem_id = problem_id
-                state.session = session
-                log(
-                    f"bound mode: {problem_id} -> tools "
-                    f"{[a['name'] for a in session.problem.actions]}"
-                )
-        except core.InverseTaskError as exc:
-            log(f"WARNING: could not bind to {problem_id!r} ({exc}); using generic mode")
 
-    if not bound:
-        register_generic_tools()
-        log("generic mode: exposing query() + describe_oracle()")
+    if args.named_tools:
+        if not problem_id:
+            log("WARNING: --named-tools needs --problem-id (or $PROBLEM_ID); staying in query mode")
+        else:
+            try:
+                session = core.load_session(problem_id)
+                if register_bound_tools(session):
+                    # Bind so setup_problem can reject a metadata/startup mismatch.
+                    state.bound_problem_id = problem_id
+                    state.session = session
+                    log(
+                        f"named-tools mode: {problem_id} -> "
+                        f"{[a['name'] for a in session.problem.actions]}"
+                    )
+                else:
+                    log(f"WARNING: {problem_id!r} declares no ACTIONS; staying in query mode")
+            except core.InverseTaskError as exc:
+                log(f"WARNING: could not bind to {problem_id!r} ({exc}); staying in query mode")
 
+    if args.selftest:
+        sys.exit(selftest(problem_id))
+
+    log("model-facing tools: query, submit_answer, describe_oracle")
     mcp.run(transport="stdio")
 
 

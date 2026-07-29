@@ -270,7 +270,7 @@ Build and push, then point a problem at it:
 {
   "id": "my-problem-id",
   "image": "<registry>/<org>/inverse-tasks:v1",
-  "startup_command": "python -u /app/mcp_server/server.py --problem-id my-problem-id",
+  "startup_command": "python -u /app/mcp_server/server.py",
   "required_tools": [],
   "scratchpad": "allowed"
 }
@@ -278,10 +278,11 @@ Build and push, then point a problem at it:
 
 Two things matter here:
 
-- **Pass `--problem-id`.** It puts the server in bound mode, where your declared
-  actions become first-class tools named as your prompt names them. Without it
-  the model gets the generic `query(action, params)` instead, because MCP
-  publishes its tool list before Taiga says which problem is running.
+- **The default startup command publishes `query`.** The model probes the oracle
+  with `query(action=..., params=...)`, and `setup_problem` appends a generated
+  guide showing the exact calls for your `ACTIONS`. If you would rather publish
+  one named tool per action, add `--named-tools --problem-id <id>` — it needs the
+  id because MCP sends its tool list before Taiga says which problem is running.
 - **Set the grading strategy to `mcp`.** These tasks are deterministic and
   graded by `grade_problem` inside the container. The Create Problem form
   defaults to `Rubric (Itemwise)`, which would hand your transcript to an LLM

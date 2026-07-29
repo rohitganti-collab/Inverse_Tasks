@@ -24,6 +24,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /etc/ssl/certs /usr/local/share/ca-certificates /workdir \
     && touch /usr/local/share/ca-certificates/custom-ca.crt
 
+# Assert the requirements rather than assuming the package names provide them.
+# Debian moves utilities between packages across releases (lscpu in particular),
+# and a missing one surfaces as an opaque Taiga preflight failure long after the
+# build. Fail here instead, naming the binary.
+RUN set -eu; \
+    for binary in bash sh free grep lscpu uptime cat find mkdir dirname mv python python3; do \
+        command -v "$binary" >/dev/null 2>&1 || { \
+            echo "FATAL: required binary '$binary' is not on PATH (see Taiga wiki:" \
+                 "onboarding/01_welcome.md, Low-Level Image Requirements)"; exit 1; }; \
+    done; \
+    for directory in /etc/ssl/certs /workdir; do \
+        [ -d "$directory" ] || { echo "FATAL: required directory '$directory' missing"; exit 1; }; \
+    done; \
+    [ -f /usr/local/share/ca-certificates/custom-ca.crt ] \
+        || { echo "FATAL: /usr/local/share/ca-certificates/custom-ca.crt missing"; exit 1; }; \
+    echo "low-level image requirements: all present"
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -40,10 +57,24 @@ COPY docker/collect_problems.py /tmp/collect_problems.py
 COPY problems/ /tmp/problems_src/
 RUN python /tmp/collect_problems.py /tmp/problems_src /app/problems \
     && rm -rf /tmp/problems_src /tmp/collect_problems.py \
-    && find /app -name '__pycache__' -type d -prune -exec rm -rf {} + \
-    && python -c "import sys; sys.path.insert(0, '/app/mcp_server'); import core; \
-ps = core.discover_problems(['/app/problems']); print('baked problems:', sorted(ps)); \
-assert ps, 'no problems in image'"
+    && find /app -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+# Verify the wiring against the *real* mcp package, which exists only here — the
+# unit tests stub it. Enumerates the published tools through FastMCP, then runs
+# setup_problem -> query -> submit_answer -> grade_problem and asserts the golden
+# answer scores 1.0 and a wrong one scores 0.0, in both tool modes. A broken
+# FastMCP integration fails the build rather than surfacing as a mystery at job
+# time. The problem id is derived, so removing a problem cannot break the gate.
+RUN set -eu; \
+    export INVERSE_TASKS_PROBLEM_DIRS=/app/problems; \
+    export PYTHONDONTWRITEBYTECODE=1; \
+    python -c "import mcp, pydantic; print('mcp', mcp.__version__ if hasattr(mcp, '__version__') else '?', '| pydantic', pydantic.VERSION)"; \
+    PID="$(python -c "import sys; sys.path.insert(0, '/app/mcp_server'); import core; \
+ps = sorted(core.discover_problems()); assert ps, 'no problems baked into the image'; print(ps[0])")"; \
+    echo "selftest problem: $PID"; \
+    python -u /app/mcp_server/server.py --selftest --problem-id "$PID"; \
+    python -u /app/mcp_server/server.py --selftest --named-tools --problem-id "$PID"; \
+    python /app/tools/validate_problem.py --no-form-values
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -56,11 +87,12 @@ ENV INVERSE_TASKS_PROBLEM_DIRS=/mnt/problems:/app/problems
 # Taiga ignores the image ENTRYPOINT/CMD and runs the problem's
 # `startup_command` instead (wiki: features/container_runtimes.md). Set that to:
 #
-#   python -u /app/mcp_server/server.py --problem-id <your-problem-id>
+#   python -u /app/mcp_server/server.py
 #
-# Passing --problem-id puts the server in "bound mode", where each action the
-# oracle declares becomes a first-class MCP tool (evaluate, help, ...) instead
-# of the generic query(action, params). Omit it and the server still works, it
-# just publishes the generic surface. CMD below only makes `docker run` usable
-# for local smoke-testing.
+# That publishes query / submit_answer / describe_oracle — the model probes the
+# oracle through `query`. Optionally add `--named-tools --problem-id <id>` to
+# publish one tool per declared action instead (evaluate, help, ...); it needs
+# the id because MCP sends its tool list before Taiga calls setup_problem.
+#
+# CMD only makes `docker run -i <image>` usable as a local smoke test.
 CMD ["python", "-u", "/app/mcp_server/server.py"]

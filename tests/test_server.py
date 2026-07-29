@@ -48,6 +48,10 @@ class FakeFastMCP:
             raise ValueError("tool needs a name")
         self.tools[resolved] = {"fn": fn, "description": description or (fn.__doc__ or "")}
 
+    async def list_tools(self):
+        """Mirrors FastMCP's async tool enumeration, as the harness sees it."""
+        return [types.SimpleNamespace(name=name) for name in self.tools]
+
     def run(self, transport=None):
         self.ran = True
 
@@ -192,7 +196,6 @@ class TestModelFacingFlow(ServerTestCase):
             SIMPLE_ORACLE,
             {"answer": [5, 2], "tolerance": 0, "keys": ["a", "b"]},
         )
-        self.srv.register_generic_tools()
         self.srv.setup_problem("demo")
 
     def test_tools_before_setup_explain_themselves(self):
@@ -280,7 +283,9 @@ class TestBoundMode(ServerTestCase):
         self.assertTrue(self.srv.register_bound_tools(session))
         self.assertIn("evaluate", self.srv.mcp.tools)
         self.assertIn("help", self.srv.mcp.tools)
-        self.assertNotIn("query", self.srv.mcp.tools)
+        # query stays published alongside the named tools: it is the
+        # decorator-registered critical path and a documented fallback.
+        self.assertIn("query", self.srv.mcp.tools)
 
     def test_named_tool_calls_through_to_the_oracle(self):
         session = core.load_session("demo", [self.root])
@@ -347,19 +352,35 @@ class TestStartupResolution(ServerTestCase):
         self.addCleanup(os.environ.pop, "PROBLEM_ID", None)
         self.assertEqual(self.srv.resolve_startup_problem(None), "a")
 
-    def test_a_lone_problem_is_auto_selected(self):
+    def test_a_lone_problem_is_NOT_auto_selected(self):
+        # The published tool surface must depend on flags, not on how many
+        # problem folders happen to be mounted.
         write_problem(self.root, "only", SIMPLE_ORACLE, {"answer": 1})
-        self.assertEqual(self.srv.resolve_startup_problem(None), "only")
+        self.assertIsNone(self.srv.resolve_startup_problem(None))
 
     def test_multiple_problems_stay_generic(self):
         write_problem(self.root, "a", SIMPLE_ORACLE, {"answer": 1})
         write_problem(self.root, "b", SIMPLE_ORACLE, {"answer": 1})
         self.assertIsNone(self.srv.resolve_startup_problem(None))
 
-    def test_main_boots_in_bound_mode_for_a_lone_problem(self):
+    def test_default_boot_publishes_query_only(self):
         write_problem(self.root, "only", SIMPLE_ORACLE, {"answer": [5, 2]})
         self.srv.main([])
         self.assertTrue(self.srv.mcp.ran)
+        self.assertIn("query", self.srv.mcp.tools)
+        self.assertNotIn("evaluate", self.srv.mcp.tools)
+        self.assertIsNone(self.srv.state.bound_problem_id)
+
+    def test_named_tools_requires_a_problem_id(self):
+        write_problem(self.root, "only", SIMPLE_ORACLE, {"answer": [5, 2]})
+        self.srv.main(["--named-tools"])
+        self.assertTrue(self.srv.mcp.ran, "the container must still boot")
+        self.assertIn("query", self.srv.mcp.tools)
+        self.assertNotIn("evaluate", self.srv.mcp.tools)
+
+    def test_named_tools_publishes_actions_when_given_a_problem_id(self):
+        write_problem(self.root, "only", SIMPLE_ORACLE, {"answer": [5, 2]})
+        self.srv.main(["--named-tools", "--problem-id", "only"])
         self.assertIn("evaluate", self.srv.mcp.tools)
         self.assertEqual(self.srv.state.bound_problem_id, "only")
 
@@ -374,9 +395,152 @@ class TestStartupResolution(ServerTestCase):
 
     def test_main_survives_an_unloadable_bound_problem(self):
         write_problem(self.root, "broken", "class NotAnOracle:\n    pass\n", {"answer": 1})
-        self.srv.main([])
+        self.srv.main(["--named-tools", "--problem-id", "broken"])
         self.assertTrue(self.srv.mcp.ran, "the container must still boot")
         self.assertIn("query", self.srv.mcp.tools)
+        self.assertIsNone(self.srv.state.bound_problem_id)
+
+
+class TestSelfTest(ServerTestCase):
+    """The check the Docker build runs, where the real `mcp` package is installed."""
+
+    def test_selftest_passes_for_a_well_formed_problem(self):
+        write_problem(self.root, "demo", SIMPLE_ORACLE, {"answer": [5, 2], "tolerance": 0})
+        self.assertEqual(self.srv.selftest("demo"), 0)
+
+    def test_selftest_reports_no_problems(self):
+        self.assertEqual(self.srv.selftest(), 1)
+
+    def test_selftest_fails_when_the_golden_answer_does_not_grade(self):
+        # A golden answer the engine can never match must not pass the build gate.
+        write_problem(self.root, "broken", SIMPLE_ORACLE, {"answer": [5, 2], "tolerance": 0})
+        original = core.compare_answers
+        core.compare_answers = lambda submission, golden: {
+            "score": 0.0, "correct": False, "matches": 0, "total": 2,
+            "details": [], "scoring": "binary", "tolerance": 0,
+        }
+        self.addCleanup(setattr, core, "compare_answers", original)
+        self.assertEqual(self.srv.selftest("broken"), 1)
+
+    def test_selftest_enumerates_the_required_tools(self):
+        write_problem(self.root, "demo", SIMPLE_ORACLE, {"answer": [5, 2], "tolerance": 0})
+        names = self.srv.published_tool_names()
+        for required in ("setup_problem", "grade_problem", "query", "submit_answer", "describe_oracle"):
+            self.assertIn(required, names)
+
+
+class TestStdoutIsProtected(ServerTestCase):
+    """stdout is the MCP transport; expert oracle code must never reach it."""
+
+    NOISY_ORACLE = """
+        import sys
+        print("module-level print")
+
+        class Oracle:
+            BUDGET = 3
+            ACTIONS = [{"name": "probe", "params": {"x": {"type": "integer", "required": True}}}]
+            def __init__(self):
+                print("constructor print")
+            def probe(self, x):
+                print("probe print")
+                sys.stdout.write("raw stdout write\\n")
+                return x * 2
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        write_problem(self.root, "noisy", self.NOISY_ORACLE, {"answer": [1], "tolerance": 0})
+
+    def test_oracle_prints_do_not_reach_stdout(self):
+        import contextlib
+        import io
+
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            self.srv.setup_problem("noisy")
+            result = self.srv.query("probe", {"x": 21})
+        self.assertEqual(captured.getvalue(), "", "oracle output leaked into the MCP transport")
+        self.assertEqual(result, "42", "the observation itself must still be returned")
+
+    def test_custom_grader_prints_do_not_reach_stdout(self):
+        import contextlib
+        import io
+
+        write_problem(
+            self.root,
+            "noisygrader",
+            SIMPLE_ORACLE,
+            {"answer": [5, 2], "tolerance": 0},
+            grader_src='def grade(**kwargs):\n    print("grader print")\n    return 1.0\n',
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            self.srv.setup_problem("noisygrader")
+            self.srv.submit_answer("[5, 2]")
+            grade = self.srv.grade_problem("noisygrader")
+        self.assertEqual(captured.getvalue(), "")
+        self.assertEqual(grade.subscores["correct"], 1.0)
+
+
+class TestGradeBounds(ServerTestCase):
+    """Taiga type-errors on a weighted grade above 1.0, which fails the episode."""
+
+    ORACLE = SIMPLE_ORACLE
+
+    def test_overweighted_custom_grader_is_normalised(self):
+        write_problem(
+            self.root,
+            "heavy",
+            self.ORACLE,
+            {"answer": [5, 2], "tolerance": 0},
+            grader_src=(
+                "def grade(**kwargs):\n"
+                "    return {\n"
+                '        "subscores": {"a": 1.0, "b": 1.0},\n'
+                '        "weights": {"a": 1.0, "b": 1.0},\n'
+                "    }\n"
+            ),
+        )
+        self.srv.setup_problem("heavy")
+        self.srv.submit_answer("[5, 2]")
+        grade = self.srv.grade_problem("heavy")
+        weighted = sum(grade.subscores[k] * w for k, w in grade.weights.items())
+        self.assertLessEqual(weighted, 1.0)
+        self.assertIn("weights_normalised", grade.metadata)
+
+    def test_wellformed_weights_are_left_alone(self):
+        write_problem(
+            self.root,
+            "fine",
+            self.ORACLE,
+            {"answer": [5, 2], "tolerance": 0},
+            grader_src=(
+                "def grade(**kwargs):\n"
+                "    return {\n"
+                '        "subscores": {"a": 1.0, "b": 0.5},\n'
+                '        "weights": {"a": 0.5, "b": 0.5},\n'
+                "    }\n"
+            ),
+        )
+        self.srv.setup_problem("fine")
+        self.srv.submit_answer("[5, 2]")
+        grade = self.srv.grade_problem("fine")
+        self.assertEqual(grade.weights, {"a": 0.5, "b": 0.5})
+        self.assertNotIn("weights_normalised", grade.metadata)
+
+    def test_grade_model_accepts_every_spec_field(self):
+        # Matches the Grade model in the Taiga wiki's Required Hooks section.
+        grade = self.srv.Grade(
+            subscores={"correct": 1.0},
+            weights={"correct": 1.0},
+            metadata={"k": "v"},
+            env_internal_failure=False,
+            env_internal_failure_logs=["log"],
+            penalties={"p": 0.1},
+            allow_unbounded=False,
+        )
+        self.assertEqual(grade.subscores["correct"], 1.0)
+        self.assertFalse(grade.allow_unbounded)
 
 
 class TestShippedSampleThroughTheServer(unittest.TestCase):
@@ -387,13 +551,13 @@ class TestShippedSampleThroughTheServer(unittest.TestCase):
         self.srv = server
 
     def test_bound_mode_publishes_the_tools_the_prompt_names(self):
-        self.srv.main(["--problem-id", "modular-black-box"])
+        self.srv.main(["--named-tools", "--problem-id", "modular-black-box"])
         self.assertIn("evaluate", self.srv.mcp.tools)
         self.assertIn("help", self.srv.mcp.tools)
         self.assertNotIn("sample", self.srv.mcp.tools)
 
     def test_intended_path_through_the_published_tools(self):
-        self.srv.main(["--problem-id", "modular-black-box"])
+        self.srv.main(["--named-tools", "--problem-id", "modular-black-box"])
         self.srv.setup_problem("modular-black-box")
         evaluate = self.srv.mcp.tools["evaluate"]["fn"]
         b = int(evaluate(0))
@@ -403,7 +567,7 @@ class TestShippedSampleThroughTheServer(unittest.TestCase):
         self.assertEqual(grade.subscores["correct"], 1.0)
 
     def test_near_miss_path_through_the_published_tools(self):
-        self.srv.main(["--problem-id", "modular-black-box"])
+        self.srv.main(["--named-tools", "--problem-id", "modular-black-box"])
         self.srv.setup_problem("modular-black-box")
         evaluate = self.srv.mcp.tools["evaluate"]["fn"]
         y10, y30 = int(evaluate(10)), int(evaluate(30))
@@ -414,13 +578,13 @@ class TestShippedSampleThroughTheServer(unittest.TestCase):
         )
 
     def test_help_is_free(self):
-        self.srv.main(["--problem-id", "modular-black-box"])
+        self.srv.main(["--named-tools", "--problem-id", "modular-black-box"])
         self.srv.setup_problem("modular-black-box")
         self.srv.mcp.tools["help"]["fn"]("anything")
         self.assertEqual(self.srv.state.session.calls_used, 0)
 
     def test_grade_metadata_is_json_serialisable(self):
-        self.srv.main(["--problem-id", "modular-black-box"])
+        self.srv.main(["--named-tools", "--problem-id", "modular-black-box"])
         self.srv.setup_problem("modular-black-box")
         self.srv.mcp.tools["evaluate"]["fn"](0)
         self.srv.submit_answer("[23, 58]")

@@ -22,6 +22,7 @@ containment — is handled here, identically for every problem.
 from __future__ import annotations
 
 import ast
+import contextlib
 import copy
 import importlib.util
 import inspect
@@ -66,8 +67,22 @@ JSON_TYPE_TO_PY = {
 }
 
 
+@contextlib.contextmanager
+def protected_stdout():
+    """Run expert-authored code with stdout redirected to stderr.
+
+    The MCP transport *is* stdout. A stray `print()` in an oracle — the kind of
+    thing anyone leaves behind while debugging — would inject text into the
+    protocol stream and break the run in a way that is very hard to trace back.
+    Redirecting keeps the output visible in the container logs while leaving the
+    transport clean, so an expert's debug print is harmless rather than fatal.
+    """
+    with contextlib.redirect_stdout(sys.stderr):
+        yield
+
+
 class InverseTaskError(Exception):
-    """Base class for engine errors that should be reported to the caller."""
+    """Base class for errors that should be reported to the caller."""
 
 
 class ProblemNotFound(InverseTaskError):
@@ -186,7 +201,8 @@ def _load_oracle_class(problem_dir: Path):
     if added:
         sys.path.insert(0, oracle_dir)
     try:
-        spec.loader.exec_module(module)
+        with protected_stdout():
+            spec.loader.exec_module(module)
     finally:
         if added:
             try:
@@ -352,7 +368,8 @@ class Problem:
         self.problem_id = problem_id
         self.directory = directory
         self.oracle_cls = _load_oracle_class(directory)
-        self.oracle = self.oracle_cls()
+        with protected_stdout():
+            self.oracle = self.oracle_cls()
 
         decl = _first_attr(self.oracle, ("ACTIONS", "actions"))
         if callable(decl):
@@ -548,7 +565,8 @@ class Session:
         if costs_budget:
             self.calls_used += 1
         try:
-            observation = fn(**params)
+            with protected_stdout():
+                observation = fn(**params)
         except TypeError as exc:
             raise OracleContractError(
                 f"Oracle rejected action {action_name!r} with params {params!r}: {exc}"
@@ -787,16 +805,18 @@ def _load_custom_grader(problem_dir: Path) -> Optional[Callable]:
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with protected_stdout():
+        spec.loader.exec_module(module)
     grade = getattr(module, "grade", None)
     if not callable(grade):
         raise InverseTaskError(f"{path} must expose a callable `grade(...)`")
 
     def call(**kwargs):
         accepted = inspect.signature(grade).parameters
-        if any(p.kind == p.VAR_KEYWORD for p in accepted.values()):
-            return grade(**kwargs)
-        return grade(**{k: v for k, v in kwargs.items() if k in accepted})
+        with protected_stdout():
+            if any(p.kind == p.VAR_KEYWORD for p in accepted.values()):
+                return grade(**kwargs)
+            return grade(**{k: v for k, v in kwargs.items() if k in accepted})
 
     return call
 
@@ -833,9 +853,31 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
             n = len(grade["subscores"]) or 1
             grade["weights"] = {k: 1.0 / n for k in grade["subscores"]}
         grade["metadata"] = {**base_metadata, **(result.get("metadata") or {})}
-        for passthrough in ("env_internal_failure", "env_internal_failure_logs", "penalties"):
+        for passthrough in (
+            "env_internal_failure",
+            "env_internal_failure_logs",
+            "penalties",
+            "allow_unbounded",
+        ):
             if passthrough in result:
                 grade[passthrough] = result[passthrough]
+
+        # Taiga rejects a grade whose weighted sum of subscores exceeds 1.0 with a
+        # type error, which would fail the episode rather than score it. Normalise
+        # instead, and record that we did, so a custom grader returning e.g. two
+        # subscores at weight 1.0 each degrades to a weighted average.
+        if not grade.get("allow_unbounded"):
+            weighted = sum(
+                grade["subscores"][k] * w for k, w in grade["weights"].items()
+                if k in grade["subscores"]
+            )
+            if weighted > 1.0 + 1e-9:
+                total = sum(grade["weights"].values()) or 1.0
+                grade["weights"] = {k: w / total for k, w in grade["weights"].items()}
+                grade["metadata"]["weights_normalised"] = (
+                    f"weighted sum was {weighted:.4f} (>1.0); weights rescaled by "
+                    f"1/{total:.4f} so the grade stays within [0, 1]"
+                )
         return grade
 
     score = _clamp(float(result.get("score", 0.0)))

@@ -92,25 +92,41 @@ the model automatically; the rest is what the model can call.
 | `setup_problem` | hidden | Fresh oracle for `problem_id`; returns `problem.md`. |
 | `grade_problem` | hidden | Scores the submission against `golden/expected.json`. |
 | `list_problems` | hidden | Which problem ids this image serves. |
-| *your declared actions* | model | One tool per `ACTIONS` entry, in bound mode. |
-| `query(action, params)` | model | The generic probe, in generic mode. |
+| `query(action, params)` | model | **The probe.** Any declared oracle action. |
 | `describe_oracle()` | model | Available actions, budget remaining, answer shape. Free. |
 | `submit_answer(answer)` | model | Final answer as JSON; resubmission allowed. |
+| *your declared actions* | model | One tool per `ACTIONS` entry — only with `--named-tools`. |
 
-**Bound vs generic mode.** MCP publishes its tool list during the initialize
-handshake, *before* Taiga says which problem is running — so per-problem tool
-names only exist if the problem is known at startup. Pass `--problem-id` (or
-`$PROBLEM_ID`, or ship exactly one problem) and the server binds at startup and
-publishes your named actions. Otherwise it publishes `query(action, params)` and
-the model discovers the surface via `describe_oracle()`. Both paths are tested.
+`setup_problem` appends a **generated tool guide** to the prompt, built from the
+oracle's `ACTIONS`, so the calls the model is told to make are always the calls
+actually published. Experts write the science; the mechanics are generated.
+
+**Why `query` and not named tools by default.** MCP publishes its tool list
+during the initialize handshake, *before* Taiga says which problem is running, so
+per-problem tool names can only exist if the problem is fixed at startup. `query`
+needs no such assumption, and the surface stays identical no matter how many
+problems a container has mounted. `--named-tools --problem-id <id>` opts into
+named tools where that's preferred; both paths are tested and both are checked by
+`--selftest`.
 
 ## Develop and test
 
 ```bash
 python3 -m unittest discover -s tests    # engine + server suites (no mcp needed)
 python3 tools/validate_problem.py        # validate every authored problem
-docker build -t inverse-tasks:local .
+docker build -t inverse-tasks:local .    # runs --selftest; fails on a broken build
 docker run --rm -i inverse-tasks:local   # stdio smoke test
+```
+
+`docker build` is a real gate, not just packaging: it asserts every binary and
+path Taiga's preflight requires, then runs `server.py --selftest` against the
+genuine `mcp` package (the unit tests stub it) — enumerating the published tools
+through FastMCP and driving `setup_problem → query → submit_answer →
+grade_problem`, asserting the golden answer scores 1.0 and a wrong one 0.0, in
+both tool modes. To run that check by hand inside a container:
+
+```bash
+docker run --rm inverse-tasks:local python -u /app/mcp_server/server.py --selftest
 ```
 
 To drive it with Taiga's real agent harness without pushing an image, use the
@@ -118,7 +134,7 @@ local tunnel (see the Taiga wiki, `features/local_tunnel.md`):
 
 ```bash
 taiga-local-tunnel start --dockerfile ./Dockerfile \
-  --startup-command "python -u /app/mcp_server/server.py --problem-id modular-black-box" \
+  --startup-command "python -u /app/mcp_server/server.py" \
   --problem-id modular-black-box
 ```
 
@@ -130,8 +146,10 @@ Push the image, then create a problem pointing at it — see
 - **Grading strategy must be `mcp`.** The Create Problem form defaults to
   `Rubric (Itemwise)`, which sends the transcript to an LLM judge and ignores
   your golden answer.
-- **`startup_command` should pass `--problem-id`**, otherwise the model gets the
-  generic `query()` surface rather than the tools your prompt names.
+- **`startup_command` is `python -u /app/mcp_server/server.py`.** That publishes
+  `query` / `submit_answer` / `describe_oracle`; the model probes through
+  `query`. Add `--named-tools --problem-id <id>` only if you want one tool per
+  declared action instead.
 
 `required_tools` is normally empty — the model needs the oracle, not bash.
 

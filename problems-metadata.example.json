@@ -2,8 +2,9 @@
   "_comment": [
     "Example Taiga problems-metadata for this image. One entry per inverse task.",
     "Replace `image` with your pushed tag (never `latest`).",
-    "startup_command: pass --problem-id so the oracle's declared actions become",
-    "first-class tools (evaluate, help, ...) instead of the generic query().",
+    "startup_command: the default publishes query/submit_answer/describe_oracle and",
+    "the model probes via query. Add --named-tools --problem-id <id> to publish one",
+    "named tool per declared oracle action instead.",
     "Set the problem's grading strategy to `mcp` in Taiga, not the default",
     "Rubric (Itemwise) — these tasks are graded deterministically by",
     "grade_problem inside the container against golden/expected.json.",
@@ -19,7 +20,7 @@
     "problems": [
       {
         "image": "<your-registry>/<your-org>/inverse-tasks:v1",
-        "startup_command": "python -u /app/mcp_server/server.py --problem-id modular-black-box",
+        "startup_command": "python -u /app/mcp_server/server.py",
         "id": "modular-black-box",
         "required_tools": [],
         "scratchpad": "allowed",
