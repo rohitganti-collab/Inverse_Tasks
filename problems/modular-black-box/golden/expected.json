@@ -1,8 +1,4 @@
 {
   "answer": [23, 58],
-  "tolerance": 0,
-  "unit": "integer",
-  "keys": ["a", "b"],
-  "scoring": "binary",
-  "notes": "Canonical residues of (a, b) mod 97. Tolerance 0 = exact match. 'unit' is metadata only."
+  "tolerance": 0
 }
