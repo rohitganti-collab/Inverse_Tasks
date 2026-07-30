@@ -1,66 +1,127 @@
-# Inverse_Tasks — Taiga Docker handoff
+# Inverse tasks — gym package
 
-Generic inverse-task MCP image for Taiga. One image serves every folder under
-`problems/`. Experts add tasks without changing the server.
+Problem content for inverse tasks, packaged for `core_gym`. **No Taiga hooks
+here**: no `setup_problem`, no `grade_problem`, no MCP server, no Dockerfile —
+`core_gym` supplies all of that. This branch is the oracle runtime surface and
+nothing else.
 
-## What the FDE builds and pushes
+An inverse task gives the model a black box it can only probe under a tight
+budget, and asks it to recover the hidden cause that explains what it observes.
 
-```bash
-# 1. Build (linux/amd64 for Taiga)
-docker build --platform linux/amd64 -t inverse-tasks:local .
+## Contents
 
-# 2. Tag for your org registry (example)
-docker tag inverse-tasks:local \
-  us-east1-docker.pkg.dev/<PROJECT>/<REPO>/inverse-tasks:v1
+```
+problems/
+  modular-black-box/
+    problem.md            the task prompt
+    oracle/setup.py       hidden Oracle, stable query(...) contract
+    golden/expected.json  {"answer": [...], "tolerance": N}
 
-# 3. Push
-docker push us-east1-docker.pkg.dev/<PROJECT>/<REPO>/inverse-tasks:v1
+template/                 copy to problems/<id>/ to add a task
+verify_problems.py        optional pre-flight checker (stdlib only)
 ```
 
-Then create/update the Taiga problem with:
+Nothing else ships: no intended solver, no shortcut/trap solver, no near-miss
+table, no calibration notes. Those stay on the authoring branch.
 
-| Field | Value |
-| --- | --- |
-| **Problem ID** | `modular-black-box` |
-| **Docker Image** | the pushed tag above |
-| **Startup Command** | `python -u /app/mcp_server/server.py` |
-| **Tools** | **empty** (delete bash / str_replace_editor) |
-| **Grading Strategy** | **`mcp`** |
-| **Task Prompt** | contents of `problems/modular-black-box/problem.md` |
-| **Preloaded Files** | optional; image already bakes the sample. To override, mount at `/mnt/problems/modular-black-box/` |
-| **Tell model about uploaded files** | **OFF** |
+## Dependencies
 
-See `problems-metadata.example.json` for a full metadata stub.
+**None beyond the standard library.** `modular-black-box` imports nothing at
+all, so no numpy or scipy is required today.
 
-## Runtime surface (model-facing)
+If a future problem needs a third-party package, add a `requirements.txt` beside
+its `oracle/setup.py`:
 
-| Tool | Who sees it | Purpose |
+```
+problems/<problem-id>/requirements.txt
+```
+
+Keep it to one pinned requirement per line. Anything a problem lists there has to
+be present in the gym image before that problem can run — treat it as a heads-up
+rather than something installed at run time.
+
+## The oracle contract
+
+`problems/<id>/oracle/setup.py` defines a class named `Oracle`:
+
+```python
+Oracle().query(mode: str, **params) -> observation
+```
+
+Construct **one instance per attempt** and forward every probe through `query`.
+
+| Member | Required | Meaning |
 | --- | --- | --- |
-| `query_oracle(mode, parameters)` | model | Probe the hidden system |
-| `describe_oracle()` | model | Modes + budget left |
-| `submit_answer(answer)` | model | Final JSON answer |
-| `setup_problem` / `grade_problem` | harness only | Load oracle / score golden |
+| `query(mode, **params)` | yes | The probe entry point. Returns the observation. |
+| `BUDGET` | recommended | Integer count of budgeted probes allowed. |
+| `ACTIONS` | optional | Declares the modes: `name`, `description`, `params`, `costs_budget`. |
+| public constants | optional | Values stated in `problem.md` (e.g. `M = 97`). |
+| `_`-prefixed | — | Hidden ground truth. Never expose these to the model. |
 
-## Problem layout
+Guarantees each oracle upholds, so the gym does not have to defend against them:
 
+- **State is per-instance.** Everything mutable lives on `self` via `__init__`,
+  so a fresh `Oracle()` is a fresh attempt and budget never leaks between
+  rollouts.
+- **Budget is enforced inside the oracle.** Exhausting it raises `RuntimeError`
+  rather than returning a value, so the limit holds whether or not the caller
+  also counts. `help` is free; `evaluate` is budgeted.
+- **Unknown modes raise `ValueError`.** Only the modes in `ACTIONS` are
+  reachable, so the probe surface cannot drift from what `problem.md` promises.
+- **Nothing is printed.** The return value is the entire interface, which keeps
+  a stdio transport clean.
+
+`modular-black-box` also exposes `evaluate(x)` and `help()` as thin aliases for
+`query`, sharing the same budget. Use them or ignore them; `query` is canonical.
+
+### modular-black-box
+
+`f(x) = (a·x + b) mod 97` with hidden `a`, `b`. Budget 6. Modes:
+
+| Mode | Cost | Returns |
+| --- | --- | --- |
+| `query("evaluate", x=<int>)` | 1 | `int` — the observation |
+| `query("help")` | free | `dict` — modes, `budget_remaining`, `modulus` |
+
+Answer: `[a, b]`, exact integers, tolerance 0.
+
+## Golden answers
+
+```json
+{ "answer": [23, 58], "tolerance": 0 }
 ```
-problems/<problem-id>/
-  problem.md              # prompt (or paste into Taiga Task Prompt)
-  oracle/setup.py         # class Oracle with query(mode, **params) + ACTIONS
-  golden/expected.json    # { "answer": [...], "tolerance": N }
-  solution/               # local validation only — NOT in the image
-```
 
-Sample: `modular-black-box`. Extra Python deps for this sample: **none**
-(stdlib only). Image deps are only `mcp` + `pydantic` (see `requirements.txt`).
+Exactly those two keys. `tolerance` is absolute and per numeric element; `0`
+means exact. Grade element-wise and in order — order is part of the answer.
 
-## Validate before push
+Set `tolerance` tighter than the distance to the nearest near-miss, or the wrong
+answer passes too.
+
+## Adding a problem
 
 ```bash
-python3 -m unittest discover -s tests
-python3 tools/validate_problem.py modular-black-box
-docker build --platform linux/amd64 -t inverse-tasks:local .
-# optional smoke:
-docker run --rm inverse-tasks:local \
-  python -u /app/mcp_server/server.py --selftest --problem-id modular-black-box
+cp -r template problems/my-problem-id
+# edit problem.md, oracle/setup.py, golden/expected.json
+python3 verify_problems.py my-problem-id
 ```
+
+Problem ids are lowercase kebab-case. `template/` sits outside `problems/` on
+purpose, so anything scanning `problems/*` only ever sees real tasks.
+
+`verify_problems.py` checks the three files exist, the golden format is exactly
+`answer` + `tolerance`, the oracle imports with no third-party deps, every
+declared action is reachable through `query`, unknown modes raise, the budget is
+enforced, two instances do not share budget, probing writes nothing to stdout,
+and the answer is not printed in the prompt. It is a development aid — the gym
+does not need it at run time.
+
+## Prompt wording
+
+`problem.md` refers to `query_oracle(mode, parameters)` and
+`submit_answer(answer)`. Those names come from `core_gym`'s tool surface — if
+they differ on your side, update those lines in `problem.md`, since the model
+reads them literally.
+
+The prompts deliberately state the setup and the budget and nothing about method.
+An inverse task is calibrated so a competent solver fails in one specific,
+predictable way; wording that hints at the intended approach destroys that.

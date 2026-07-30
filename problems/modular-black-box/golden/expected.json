@@ -1,6 +1,4 @@
 {
   "answer": [23, 58],
-  "tolerance": 0,
-  "keys": ["a", "b"],
-  "scoring": "binary"
+  "tolerance": 0
 }

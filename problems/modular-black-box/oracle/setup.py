@@ -1,27 +1,45 @@
 """Hidden oracle for modular-black-box.
 
-The model never imports this file. Taiga's MCP server loads `class Oracle` and
-exposes probes only through `query_oracle(mode, parameters)`.
+The model never sees this file. The gym imports `Oracle`, constructs one
+instance per attempt, and forwards every probe through `query`.
 
-Contract used by the gym / MCP engine:
-
-    Oracle().query(mode, **params) -> observation
+Contract
+--------
+    Oracle().query(mode: str, **params) -> observation
 
 Modes:
-  - evaluate(x=int)  — budgeted integer observation
-  - help()           — free; lists modes + remaining budget
+  evaluate(x: int) -> int   budgeted; the black-box observation
+  help()           -> dict  free; available modes and remaining budget
+
+Rules this oracle guarantees:
+  * A fresh `Oracle()` is a fresh attempt — all mutable state lives on the
+    instance, never at module or class level, so budget cannot leak between
+    rollouts.
+  * The budget is enforced here. Exceeding it raises RuntimeError rather than
+    returning a value, so it holds even if the caller does not track it.
+  * An unknown mode raises ValueError. Only the modes listed in ACTIONS are
+    reachable, so the probe surface can never drift from what problem.md
+    promises.
+  * No output is ever printed; the return value is the whole interface.
+
+Dependencies: standard library only.
 """
 from __future__ import annotations
 
 
 class Oracle:
-    """f(x) = (a * x + b) mod M, with hidden a, b."""
+    """f(x) = (a * x + b) mod M, with hidden a and b."""
 
+    # --- public: stated in problem.md, safe for the model to know ---------- #
     M = 97
     BUDGET = 6
+
+    # --- hidden ground truth ---------------------------------------------- #
     _A = 23
     _B = 58
 
+    # Optional metadata. The gym may use it to enumerate the probe surface and
+    # to know which modes cost budget; `query` works without reading it.
     ACTIONS = [
         {
             "name": "evaluate",
@@ -37,68 +55,56 @@ class Oracle:
         },
         {
             "name": "help",
-            "description": "List available modes and remaining budget. Never reveals a or b.",
-            "params": {
-                "question": {
-                    "type": "string",
-                    "description": "Unused; accepted for a uniform calling shape.",
-                    "default": "",
-                }
-            },
+            "description": (
+                "List available modes and remaining budget. Never reveals a or b."
+            ),
+            "params": {},
             "costs_budget": False,
         },
     ]
 
-    ANSWER_SCHEMA = {
-        "type": "array",
-        "length": 2,
-        "item_types": ["integer"],
-        "keys": ["a", "b"],
-        "description": "The pair (a, b), in that order.",
-    }
-
     def __init__(self) -> None:
-        # Fresh instance per attempt — budget must not leak across runs.
         self._used = 0
 
+    # ---------------------------------------------------------------- probe #
     def query(self, mode: str, **params):
-        """Stable probe entry point. MCP `query_oracle` forwards here."""
+        """Stable probe entry point. Every observation flows through here."""
         if mode == "help":
             return {
                 "description": "Integer black box with a known modulus.",
                 "modes": {
-                    "evaluate": "{x: integer} -> observation: integer",
+                    "evaluate": "{x: integer} -> integer",
                     "help": "{} -> {description, modes, budget_remaining, modulus}",
                 },
                 "budget_remaining": self.BUDGET - self._used,
+                "budget_total": self.BUDGET,
                 "modulus": self.M,
             }
 
         if mode == "evaluate":
             if "x" not in params:
-                raise ValueError("evaluate requires parameter x")
+                raise ValueError("evaluate requires parameter 'x' (integer)")
+            try:
+                x = int(params["x"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"evaluate parameter 'x' must be an integer, got {params['x']!r}"
+                ) from None
             if self._used >= self.BUDGET:
                 raise RuntimeError(f"Query budget exceeded ({self.BUDGET} calls).")
             self._used += 1
-            x = int(params["x"])
             return (self._A * x + self._B) % self.M
 
-        raise ValueError(f"Unknown mode: {mode!r}")
+        raise ValueError(
+            f"Unknown mode {mode!r}. Available modes: "
+            f"{[a['name'] for a in self.ACTIONS]}"
+        )
 
-    # Named methods so ACTIONS can dispatch without going through query().
-    def evaluate(self, x: int):
+    # ------------------------------------------------------- optional sugar #
+    # Convenience aliases if the gym prefers method dispatch over query().
+    # Both routes are equivalent and share the same budget.
+    def evaluate(self, x: int) -> int:
         return self.query("evaluate", x=x)
 
-    def help(self, question: str = ""):
-        return self.query("help", question=question)
-
-
-# Optional module-level alias for local scripts (same shape as the MCP tool).
-_MODULE_ORACLE = None
-
-
-def query_oracle(mode: str, parameters=None):
-    global _MODULE_ORACLE
-    if _MODULE_ORACLE is None:
-        _MODULE_ORACLE = Oracle()
-    return _MODULE_ORACLE.query(mode, **(parameters or {}))
+    def help(self) -> dict:
+        return self.query("help")

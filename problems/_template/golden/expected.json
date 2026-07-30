@@ -1,6 +1,0 @@
-{
-  "answer": [42],
-  "tolerance": 0,
-  "keys": ["secret"],
-  "scoring": "binary"
-}
