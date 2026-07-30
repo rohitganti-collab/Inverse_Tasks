@@ -4,8 +4,8 @@
 # live under problems/<problem_id>/ and exposes exactly the probe surface each
 # expert's oracle declares. Adding a task means adding a folder — no changes
 # here. See docs/AUTHORING.md.
-ARG TARGETPLATFORM=linux/amd64
-FROM --platform=${TARGETPLATFORM} python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
+ARG INVERSE_TASKS_PLATFORM=linux/amd64
+FROM --platform=${INVERSE_TASKS_PLATFORM} python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
 
 # Taiga's low-level container requirements (wiki: onboarding/01_welcome.md,
 # "Low-Level Image Requirements for Running a Container in Taiga"):
@@ -128,4 +128,5 @@ ENV INVERSE_TASKS_PROBLEM_DIRS=/mnt/problems:/app/problems
 # prompt. Preloaded problem mounts therefore need to be writable by root.
 #
 # CMD only makes `docker run -i <image>` usable as a local smoke test.
+WORKDIR /workdir
 CMD ["python", "-u", "/app/mcp_server/server.py"]
