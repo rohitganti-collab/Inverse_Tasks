@@ -14,7 +14,7 @@ modulus.
 
 You have access to `query_oracle(mode, parameters)`. Call
 `query_oracle(mode="help", parameters={})` to discover available modes and your
-remaining budget.
+remaining budget. Budgeted probes may be used at most **6** times.
 
 # Your task
 
