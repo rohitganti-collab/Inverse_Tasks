@@ -1,0 +1,40 @@
+"""Shortcut (trap) solver for <problem-id> — the default path, made concrete.
+
+This file MUST FAIL 32/32. If it ever passes, the task is broken: the default is
+not actually wrong enough, or the tolerance is too wide.
+
+It must also fail ONTO THE NAMED NEAR-MISS in grader/grading_guide.md — that is
+what makes the ≥60% failure-concentration check meaningful.
+
+For a forward task the shortcut is almost always ONE RUN AT THE DEFAULTS,
+reported without any convergence check. That is what makes it tempting: it is
+cheap, it completes cleanly, and the number looks entirely reasonable.
+
+Same contract as main.py: `solve(oracle)` takes a fresh Oracle and returns the
+answer in golden/expected.json's shape. NOT shipped to the gym.
+
+Common forward traps:
+  * Default resolution — unconverged, but the number looks plausible
+  * Default method — steady-state where the physics is transient
+  * No convergence check at all; one run and report
+  * A default convention (sign, reference quantity, denominator)
+  * Reporting an instantaneous value where a time-average was required
+"""
+from __future__ import annotations
+
+
+def solve(oracle):
+    """The default path. Must land on the named near-miss.
+
+    Args:
+        oracle: a fresh Oracle instance.
+
+    Returns:
+        The near-miss answer — right shape, wrong value.
+    """
+    # One run at the defaults. No second run, no convergence check.
+    result = oracle.query("run", resolution=...)  # TODO: the naive default
+
+    naive_answer = ...  # TODO: the near-miss this produces
+
+    return naive_answer

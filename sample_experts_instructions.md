@@ -1,5 +1,7 @@
 # Expert Instructions
 
+> **Templates:** [`templates/inverse-task/`](templates/inverse-task/) turns these 8 steps into files you fill in, with the oracle contract and checklists spelled out. [`templates/forward-task/`](templates/forward-task/) covers the forward direction. Start there.
+
 **Your job:** author one *inverse task* — a scientific puzzle with a hidden, provably unique answer that a competent scientist can get wrong in a specific, predictable way. You own the science. Claude writes the code.
 
 ## Forward vs. Inverse — the one thing to internalize

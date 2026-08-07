@@ -1,0 +1,74 @@
+<!--
+problem.md — THE ONLY FILE THE MODEL SEES.
+
+WRITE THIS LAST — Step 8 in INSTRUCTIONS.md. Do not draft it before the answer
+is verified and the shortcut has been shown to fail.
+
+YOU write this, in your own words. Per the AI Use Policy, Claude must never
+draft the solver-facing prompt.
+
+A forward task hides NOTHING about the system — disclose it fully. What you must
+not disclose is WHICH SETTINGS ARE ADEQUATE. That decision is the task.
+
+CHECKLIST before saving:
+  [ ] The answer value does not appear anywhere in this file
+      (verify_problems.py fails the task if it does)
+  [ ] The system is fully specified — geometry, parameters, conditions, regime
+  [ ] No hint that the default resolution/method is inadequate
+  [ ] No "you should refine", "check convergence", "use the transient solver"
+  [ ] No method name that hands over the solver choice
+  [ ] Resolution / method / stopping decisions left entirely to the model
+  [ ] Not a canonical setup whose answer can be recalled from literature
+  [ ] The budget is stated, and matches Oracle.BUDGET exactly
+  [ ] Answer shape matches golden/expected.json element for element, in order
+  [ ] Tolerance and units stated
+  [ ] Any convention that matters (sign, reference quantity, denominator) IS stated
+  [ ] submit_answer(answer) instruction present
+
+The last two pull in opposite directions and both matter: state the CONVENTION
+(so a correct solver isn't guessing what you want) but never the METHOD (so the
+solver still has to decide how to get there).
+
+NOTE: `query_oracle(mode, parameters)` and `submit_answer(answer)` are the gym's
+tool names and the model reads them literally.
+-->
+
+# <Title>
+
+<!-- Describe the system completely: geometry, material or rate parameters,
+     boundary and initial conditions, the physical regime, and the quantity to
+     report. Nothing about this system is secret — withholding part of the setup
+     turns this into a guessing game rather than a method decision.
+
+     State the regime factually ("the flow is at Reynolds number 100") without
+     drawing the conclusion that follows from it ("...so the wake is unsteady
+     and you will need a transient solver"). The first is the setup. The second
+     is the answer to the question being asked. -->
+
+# What you can use
+
+You have access to `query_oracle(mode, parameters)`. Call
+`query_oracle(mode="help", parameters={})` to list the modes and see your
+remaining budget.
+
+- `spec` — the complete system definition. Free.
+- `run` — run the computation under settings you choose, and return the result.
+  Budgeted.
+- `help` — modes and remaining budget. Free.
+
+Budgeted runs may be used at most **<N>** times in total.
+
+<!-- <N> must equal Oracle.BUDGET. -->
+
+# Your task
+
+<!-- State exactly which quantity to report. One paragraph. Say nothing about
+     how to compute it or what settings to use. -->
+
+# Output format
+
+<!-- The submission shape, matching golden/expected.json element for element and
+     in the same order. State the tolerance, the units, and any convention that
+     affects the number. -->
+
+Submit your answer via `submit_answer(answer)`.

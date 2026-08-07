@@ -1,0 +1,56 @@
+# STATE — <title>
+
+<!-- Your authoring record. Sections follow the build order in INSTRUCTIONS.md.
+     Not shipped to the gym — it exists so you keep the build straight and so a
+     reviewer can follow your reasoning. -->
+
+state: BRIEFED
+
+## Why this is the only answer
+
+<!-- Step 1. The uniqueness argument. Fix the hidden ground truth, then write
+     down why NO OTHER ANSWER IS POSSIBLE. This is the load-bearing section of
+     the whole task.
+
+     If you cannot prove uniqueness, stop and pick a different setup. If this
+     section keeps changing while you build, the task is not stable yet. -->
+
+## Order of decisions
+
+<!-- Step 2. What must be measured or known first? What does it unlock? Where
+     does validation belong? This becomes the intended solution path, and
+     solution/main.py should follow it step for step. -->
+
+## Near-misses
+
+<!-- Step 3. Every wrong answer a COMPETENT colleague might produce, and why
+     each is tempting. At least one must look structurally correct — right
+     shape, wrong number.
+
+     Also record the distance from the correct answer to the nearest near-miss:
+     your tolerance has to be tighter than that. -->
+
+## The trap
+
+<!-- Step 4. Of the near-misses above, the single most common professional
+     error. This is what the task actually tests, what shortcut.py implements,
+     and what ≥60% of failures should land on. -->
+
+## Budget
+
+<!-- Step 6. The number, and the arithmetic behind it: how many probes does the
+     intended path need, how many does the shortcut need, and why does brute
+     force not fit? -->
+
+## Calibration
+
+<!-- Step 7. Record the measured numbers, not intentions:
+     intended solver     __/32
+     shortcut solver     __/32   (must be 0)
+     pass rate           ____    (target 0.15-0.40, ideally ~0.30)
+     checkpoints tested  ____    (>=3)
+     failures on the named near-miss  ____%   (must be >=60%) -->
+
+## Notes
+
+<!-- state sequence: BRIEFED -> LOCKED -> NEAR-MISSES -> SPECED -> CALIBRATED -> READY -->

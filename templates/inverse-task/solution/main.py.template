@@ -1,0 +1,45 @@
+"""Intended solver for <problem-id> — the correct path.
+
+Must pass 32/32 against the oracle. See Step 7 in ../INSTRUCTIONS.md.
+
+Contract: `solve(oracle)` receives a FRESH Oracle instance and returns the
+answer in the exact shape and order of golden/expected.json. Do not construct
+the Oracle yourself — the harness hands you one per attempt.
+
+Rules:
+  * Query the oracle. NEVER read Oracle._SECRET or any `_`-prefixed value, and
+    never hardcode the hidden ground truth — that would pass while proving
+    nothing.
+  * Stay inside BUDGET. The intended path must fit, and only just.
+  * Validate before committing, if the budget allows one confirming probe.
+  * Return the answer; do not print it.
+
+Per the AI Use Policy, Claude implements this from YOUR spec. You review it.
+"""
+from __future__ import annotations
+
+
+def solve(oracle):
+    """Recover the hidden values from budgeted observations.
+
+    Args:
+        oracle: a fresh Oracle instance. Probe it via oracle.query(mode, **params).
+
+    Returns:
+        The answer, matching golden/expected.json element for element, in order.
+    """
+    # 1. Discover the probe surface and your budget. Free — costs nothing.
+    info = oracle.query("help")
+
+    # 2. Spend budget deliberately. Choose the modes and inputs that actually
+    #    discriminate between the candidate answers you enumerated in Step 3.
+    #    Replace with the real inference for your task.
+    y0 = oracle.query("evaluate", x=0)
+    y1 = oracle.query("evaluate", x=1)
+
+    # 3. Invert: observations -> hidden values.
+    answer = ...  # TODO: compute from the observations above
+
+    # 4. Validate against one more probe before committing, if budget remains.
+
+    return answer

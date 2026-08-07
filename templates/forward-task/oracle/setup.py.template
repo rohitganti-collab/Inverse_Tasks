@@ -1,0 +1,159 @@
+"""System for <problem-id> — a FORWARD task. NOTHING HERE IS HIDDEN.
+
+The model never reads this file, but unlike an inverse task it is not being kept
+in the dark: `spec` discloses the complete system definition, and `problem.md`
+states everything else. There is no secret to recover.
+
+The difficulty lives in the METHOD-SELECTION DECISION. The model chooses the
+settings the forward computation runs under — resolution, step size, solver,
+stopping criterion — and a naive default silently produces a plausible but wrong
+number. See ../INSTRUCTIONS.md.
+
+Contract (identical to an inverse task's — the gym does not special-case this)
+------
+    Oracle().query(mode: str, **params) -> observation
+
+Four guarantees. `verify_problems.py` checks every one:
+
+  1. State is per-instance — all mutable values on `self` via `__init__`, so
+     budget never leaks between rollouts.
+  2. Budget enforced HERE, raising RuntimeError. `help` and `spec` are free.
+  3. Unknown modes raise ValueError.
+  4. Nothing is ever printed.
+
+WHY BUDGET A TASK WITH NOTHING HIDDEN: so the model cannot sweep every setting
+and pick the value the results converge to. Brute-forcing the sweep IS the
+method decision — remove the budget and you have removed the task. Set it wide
+enough for a deliberate convergence check, no wider.
+
+THE `run` MODE MUST NOT JUDGE. Return the computed observation and the settings
+it used. Never say converged/unconverged, never warn that a setting is too
+coarse, never return a residual the model can threshold into a free answer.
+Recognising an unconverged result is the skill being tested.
+
+Dependencies: standard library only. If this problem needs a solver package,
+add a `requirements.txt` beside this file and flag it — the gym image must carry
+it.
+"""
+from __future__ import annotations
+
+
+class Oracle:
+    """<one line: the system being computed forward>"""
+
+    # --- public: fully disclosed, also stated in problem.md ---------------- #
+    BUDGET = 12
+
+    # A forward task has NO `_`-prefixed ground truth. If you find yourself
+    # adding one, you are writing an inverse task — use ../../inverse-task/.
+
+    ACTIONS = [
+        {
+            "name": "spec",
+            "description": (
+                "Return the complete system definition: geometry, parameters, "
+                "boundary conditions, and the regime. Discloses everything."
+            ),
+            "params": {},
+            "costs_budget": False,
+        },
+        {
+            "name": "run",
+            "description": (
+                "Run the forward computation under settings you choose and "
+                "return the resulting observation."
+            ),
+            "params": {
+                "resolution": {
+                    "type": "integer",
+                    "description": "Discretisation resolution.",
+                    "required": True,
+                },
+                "method": {
+                    "type": "string",
+                    "description": "Which solver to use.",
+                    "default": "<default-method>",
+                },
+            },
+            "costs_budget": True,
+        },
+        {
+            "name": "help",
+            "description": "List available modes and remaining budget.",
+            "params": {},
+            "costs_budget": False,
+        },
+    ]
+
+    def __init__(self) -> None:
+        self._used = 0
+
+    # ---------------------------------------------------------------- probe #
+    def query(self, mode: str, **params):
+        """Stable probe entry point. Every observation flows through here."""
+        if mode == "help":
+            return {
+                "description": "<one neutral line: what system this computes>",
+                "modes": {
+                    "spec": "{} -> dict",
+                    "run": "{resolution: integer, method: string} -> number",
+                    "help": "{} -> {description, modes, budget_remaining}",
+                },
+                "budget_remaining": self.BUDGET - self._used,
+                "budget_total": self.BUDGET,
+            }
+
+        if mode == "spec":
+            # Free and complete. Nothing withheld — but say nothing about WHICH
+            # settings to run under. Listing a "default" is fine; calling it
+            # adequate, recommended, or sufficient is a leak.
+            return {
+                "geometry": "<...>",
+                "parameters": {},
+                "boundary_conditions": {},
+                "regime": "<...>",
+                "available_methods": ["<method-a>", "<method-b>"],
+                "resolution_range": [0, 0],
+            }
+
+        if mode == "run":
+            if "resolution" not in params:
+                raise ValueError("run requires parameter 'resolution' (integer)")
+            try:
+                resolution = int(params["resolution"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"run parameter 'resolution' must be an integer, "
+                    f"got {params['resolution']!r}"
+                ) from None
+            method = str(params.get("method", "<default-method>"))
+
+            self._spend()
+
+            # TODO: the real forward computation, honouring the settings given.
+            #
+            # It MUST actually depend on them — a coarse resolution has to
+            # return a genuinely different (wrong) number, and it has to do so
+            # WITHOUT crashing or warning. A silent wrong answer is the trap; a
+            # loud one is a hint.
+            observation = ...  # TODO
+
+            # Echo the settings so the model can see what it asked for. Return
+            # no verdict on their adequacy.
+            return {
+                "observation": observation,
+                "resolution": resolution,
+                "method": method,
+            }
+
+        raise ValueError(
+            f"Unknown mode {mode!r}. Available modes: "
+            f"{[a['name'] for a in self.ACTIONS]}"
+        )
+
+    # --------------------------------------------------------------- helpers #
+    def _spend(self) -> None:
+        """Charge one budgeted run. Raises rather than returning when spent."""
+        if self._used >= self.BUDGET:
+            raise RuntimeError(f"Query budget exceeded ({self.BUDGET} calls).")
+        self._used += 1

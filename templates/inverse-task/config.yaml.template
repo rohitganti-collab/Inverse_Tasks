@@ -1,0 +1,4 @@
+# Task metadata. Keep values clean — no inline `# comment` after a value.
+direction: inverse
+domain: <your-domain>
+title: <human-readable title>

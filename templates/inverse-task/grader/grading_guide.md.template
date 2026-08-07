@@ -1,0 +1,35 @@
+# Grading guide — <title>
+
+<!-- YOU own this file. Per the AI Use Policy, Claude must not write it. -->
+
+**Golden answer:** <the answer, in the shape golden/expected.json uses>
+
+**Graded:** element-wise, in order — order is part of the answer.
+**Tolerance:** <N> — absolute, per numeric element. `0` means exact.
+
+<!-- The tolerance must be TIGHTER than the distance from the correct answer to
+     the nearest near-miss below. If the near-miss falls inside tolerance, the
+     wrong answer passes and the task is broken. State that distance here. -->
+
+Distance to nearest near-miss: <value> — tolerance is set inside this.
+
+## Near-miss table
+
+<!-- One row per wrong answer a competent colleague might produce. Every row
+     needs a reason it loses. At least one must look structurally correct.
+     The row marked TRAP is the one shortcut.py produces and the one ≥60% of
+     failures should land on. -->
+
+| Candidate answer | Looks right because | Why it loses |
+|---|---|---|
+| `<correct>` | — | — (this is the answer) |
+| `<near-miss-1>` **(TRAP)** | <why it is tempting> | <what it fails to account for> |
+| `<near-miss-2>` | <why it is tempting> | <why it loses> |
+| `<incomplete>` | <e.g. one component is easy to read off> | Incomplete — the task asks for all components |
+| `<reordered>` | All the numbers are present | Order matters; the specified order is <...> |
+
+## Edge cases the judge should know
+
+<!-- e.g. "Accept the value inside a JSON wrapper iff it is unambiguous. Reject
+     a range or multiple candidates. Reject a correct value in the wrong
+     position." -->

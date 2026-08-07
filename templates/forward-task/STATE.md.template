@@ -1,0 +1,64 @@
+# STATE — <title>
+
+<!-- Your authoring record. Sections follow the build order in INSTRUCTIONS.md.
+     Not shipped to the gym. -->
+
+state: BRIEFED
+
+## The verified answer
+
+<!-- Step 1. The answer, and HOW YOU VERIFIED IT. A forward task has no hidden
+     ground truth to check against, so this is the whole foundation: a
+     literature reference, an analytical limit, or an independent setup in a
+     different tool.
+
+     "My converged run produced it" is NOT verification — it is the same
+     computation agreeing with itself. -->
+
+## The method decision
+
+<!-- Step 2. The one decision that determines correctness: resolution, method,
+     stopping criterion, boundary treatment, or convention. Name it precisely,
+     and record the number the naive default produces alongside the correct one.
+
+     correct answer:        ____
+     naive default gives:   ____
+     separation:            ____   (tolerance must sit inside this) -->
+
+## Near-misses
+
+<!-- Step 3. Every wrong answer a competent colleague might report, and why each
+     is tempting. At least one must look structurally correct. -->
+
+## The trap
+
+<!-- Step 4. The single most common professional error from the list above —
+     what shortcut.py implements and what ≥60% of failures should land on. -->
+
+## Silent-failure check
+
+<!-- Step 3/6. Confirm the naive run FAILS QUIETLY: it completes, emits no
+     warning, and returns a plausible number. Record what the naive run actually
+     printed and returned. If it crashes or warns, the model will notice and
+     correct course, and the trap will not hold. -->
+
+## Budget
+
+<!-- Step 6. The number, and the arithmetic: how many runs does an honest
+     convergence check need, how many does the shortcut need, and why can't the
+     model sweep every setting and read off where the results converge?
+
+     A budget that permits a full sweep removes the task. -->
+
+## Calibration
+
+<!-- Step 7. Measured numbers, not intentions:
+     intended solver     __/32
+     shortcut solver     __/32   (must be 0)
+     pass rate           ____    (target 0.15-0.40, ideally ~0.30)
+     checkpoints tested  ____    (>=3)
+     failures on the named near-miss  ____%   (must be >=60%) -->
+
+## Notes
+
+<!-- state sequence: BRIEFED -> VERIFIED -> NEAR-MISSES -> SPECED -> CALIBRATED -> READY -->

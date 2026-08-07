@@ -1,0 +1,63 @@
+<!--
+problem.md — THE ONLY FILE THE MODEL SEES.
+
+WRITE THIS LAST — Step 8 in INSTRUCTIONS.md. Do not draft it before the answer
+is locked, the oracle is built, and the intended solver passes while the
+shortcut fails.
+
+YOU write this, in your own words. Per the AI Use Policy, Claude must never
+draft the solver-facing prompt.
+
+State the setup and the budget. Nothing about method.
+
+CHECKLIST before saving:
+  [ ] The answer value does not appear anywhere in this file
+      (verify_problems.py fails the task if it does)
+  [ ] The trap is not named, hinted, or gestured at — and it is not in the
+      oracle's help text or any error message either
+  [ ] No method names (the technique, algorithm, or transform to use)
+  [ ] No canonical/memorised target the answer could be recalled from
+  [ ] No strategy hints ("start by measuring...", "note that adjacent inputs...")
+  [ ] Every constant the solver is ALLOWED to know is stated
+  [ ] The budget is stated, and matches Oracle.BUDGET exactly
+  [ ] Answer shape matches golden/expected.json element for element, in order
+  [ ] Tolerance stated
+  [ ] submit_answer(answer) instruction present
+
+NOTE: `query_oracle(mode, parameters)` and `submit_answer(answer)` are the
+gym's tool names and the model reads them literally. If your side uses
+different names, change them here.
+-->
+
+# <Title>
+
+<!-- Describe the black box: what it accepts, what it returns, and the form of
+     its internal computation. State every constant the solver is allowed to
+     know (a known modulus, a fixed temperature, a stated sampling rate).
+
+     Describe it operationally. The solver must not be able to read the
+     intended method — or the error it discriminates against — out of your
+     wording. -->
+
+# What you can use
+
+You have access to `query_oracle(mode, parameters)`. Call
+`query_oracle(mode="help", parameters={})` to discover the available modes and
+your remaining budget. `help` is free.
+
+Budgeted probes may be used at most **<N>** times in total.
+
+<!-- <N> must equal Oracle.BUDGET. If they disagree, the model is being lied
+     to about its own budget. -->
+
+# Your task
+
+<!-- State exactly what to recover. One paragraph. No method, no hint. -->
+
+# Output format
+
+<!-- Describe the submission shape, matching golden/expected.json element for
+     element and in the same order — order is part of the answer. State the
+     tolerance, and the units if any. -->
+
+Submit your answer via `submit_answer(answer)`.

@@ -1,0 +1,41 @@
+# Grading guide — <title>
+
+<!-- YOU own this file. Per the AI Use Policy, Claude must not write it. -->
+
+**Golden answer:** <the answer, in the shape golden/expected.json uses>
+
+**Verified by:** <literature reference / analytical limit / independent setup —
+not "my own converged run">
+
+**Graded:** element-wise, in order — order is part of the answer.
+**Tolerance:** <N> — absolute, per numeric element. `0` means exact.
+
+<!-- The tolerance must EXCLUDE the naive-default answer while still admitting a
+     genuinely converged solve that made reasonable implementation choices.
+     Those two constraints squeeze it from both sides — state both numbers. -->
+
+| | Value |
+|---|---|
+| Correct answer | `<value>` |
+| Naive default produces | `<value>` |
+| Separation | `<value>` |
+| Tolerance (inside the separation) | `<N>` |
+
+## Near-miss table
+
+<!-- One row per naive path. Every row needs a reason it loses. The row marked
+     TRAP is what shortcut.py produces and what ≥60% of failures should hit. -->
+
+| Candidate answer | Looks right because | Why it loses |
+|---|---|---|
+| `<correct>` | — | — (this is the answer) |
+| `<default-resolution-result>` **(TRAP)** | One clean run, no warnings, plausible magnitude | Unconverged — the result is still moving at that resolution |
+| `<wrong-method-result>` | The solver ran and reported a steady value | Steady-state treatment where the physics is unsteady |
+| `<wrong-convention-result>` | Numerically defensible under a different convention | The stated convention is <...> |
+| `<instantaneous-not-averaged>` | A single reading from a valid run | The quantity asked for is a time-average |
+
+## Edge cases the judge should know
+
+<!-- e.g. "Accept the value inside a JSON wrapper iff unambiguous. Reject a
+     range or multiple candidates. A correct value reported in the wrong units
+     is wrong — units were stated." -->
