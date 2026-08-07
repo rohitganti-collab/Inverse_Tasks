@@ -1,44 +1,46 @@
 """Intended solver for <problem-id> — the correct path.
 
-Must pass 32/32 against the oracle. See Step 7 in ../INSTRUCTIONS.md.
+AUTHORING AND CALIBRATION ONLY. Never mount this under Preloaded Files; it does
+not ship to Taiga.
 
-Contract: `solve(oracle)` receives a FRESH Oracle instance and returns the
-answer in the exact shape and order of golden/expected.json. Do not construct
-the Oracle yourself — the harness hands you one per attempt.
+Contract: `solve(oracle)` returns the answer in the same shape and order as
+golden/expected.json. Return it; do not print it.
 
-Rules:
-  * Query the oracle. NEVER read Oracle._SECRET or any `_`-prefixed value, and
-    never hardcode the hidden ground truth — that would pass while proving
-    nothing.
-  * Stay inside BUDGET. The intended path must fit, and only just.
-  * Validate before committing, if the budget allows one confirming probe.
-  * Return the answer; do not print it.
+The validator runs this through the SAME budgeted path the model uses, so
+`oracle` is a proxy, not the raw class:
+  * declared actions work either way — `oracle.evaluate(0)` or
+    `oracle.query("evaluate", x=0)`
+  * public constants pass through — `oracle.M`, `oracle.BUDGET`
+  * `_`-prefixed attributes RAISE. You cannot read `_SECRET` to "prove" this
+    works, and an undeclared action is an error.
+
+It must pass within budget. See Step 7 in ../INSTRUCTIONS.md.
 
 Per the AI Use Policy, Claude implements this from YOUR spec. You review it.
 """
-from __future__ import annotations
 
 
 def solve(oracle):
     """Recover the hidden values from budgeted observations.
 
     Args:
-        oracle: a fresh Oracle instance. Probe it via oracle.query(mode, **params).
+        oracle: budgeted proxy over a fresh Oracle instance.
 
     Returns:
         The answer, matching golden/expected.json element for element, in order.
     """
-    # 1. Discover the probe surface and your budget. Free — costs nothing.
-    info = oracle.query("help")
+    # 1. Discover the probe surface and budget. Free.
+    help_info = oracle.help()
 
     # 2. Spend budget deliberately. Choose the modes and inputs that actually
-    #    discriminate between the candidate answers you enumerated in Step 3.
-    #    Replace with the real inference for your task.
-    y0 = oracle.query("evaluate", x=0)
-    y1 = oracle.query("evaluate", x=1)
+    #    discriminate between the candidate answers enumerated in Step 3.
+    #
+    #    REPLACE: the placeholder system is (x + secret) % 100, so the full-
+    #    resolution reading at x=0 returns the secret directly.
+    y0 = oracle.evaluate(0)
 
     # 3. Invert: observations -> hidden values.
-    answer = ...  # TODO: compute from the observations above
+    answer = [y0]  # TODO: replace with the real inversion for your task
 
     # 4. Validate against one more probe before committing, if budget remains.
 

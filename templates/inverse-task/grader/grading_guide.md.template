@@ -1,11 +1,19 @@
 # Grading guide — <title>
 
-<!-- YOU own this file. Per the AI Use Policy, Claude must not write it. -->
+<!-- YOU own this file. Per the AI Use Policy, Claude must not write it.
+     DOES NOT SHIP to Taiga — it names the trap outright. Upload it only as a
+     Supporting File, for human review. -->
 
 **Golden answer:** <the answer, in the shape golden/expected.json uses>
 
 **Graded:** element-wise, in order — order is part of the answer.
 **Tolerance:** <N> — absolute, per numeric element. `0` means exact.
+**Scoring:** `binary`
+
+<!-- Keep scoring binary unless you really mean otherwise. With "partial", a
+     solver who recovers one of two constants earns 0.5 — which rewards exactly
+     the incomplete near-miss most tasks are designed to reject. -->
+
 
 <!-- The tolerance must be TIGHTER than the distance from the correct answer to
      the nearest near-miss below. If the near-miss falls inside tolerance, the

@@ -1,58 +1,55 @@
 """System for <problem-id> — a FORWARD task. NOTHING HERE IS HIDDEN.
 
-The model never reads this file, but unlike an inverse task it is not being kept
-in the dark: `spec` discloses the complete system definition, and `problem.md`
-states everything else. There is no secret to recover.
+Ships to Taiga (Preloaded Files), same as an inverse task's oracle. The engine
+does not special-case direction: the model's only tools are `query_oracle`,
+`describe_oracle`, and `submit_answer`, so even a forward task must reach the
+model through a declared probe surface. There is no file-serving tool.
 
-The difficulty lives in the METHOD-SELECTION DECISION. The model chooses the
-settings the forward computation runs under — resolution, step size, solver,
-stopping criterion — and a naive default silently produces a plausible but wrong
-number. See ../INSTRUCTIONS.md.
+Unlike an inverse task there is no secret to recover. `spec` discloses the
+complete system definition. The difficulty lives in the METHOD-SELECTION
+DECISION — the model picks the settings the computation runs under, and a naive
+default silently produces a plausible but wrong number. See ../INSTRUCTIONS.md.
 
-Contract (identical to an inverse task's — the gym does not special-case this)
-------
-    Oracle().query(mode: str, **params) -> observation
+The engine builds a fresh Oracle() per attempt and calls `oracle.<action>(**params)`.
 
-Four guarantees. `verify_problems.py` checks every one:
+WHAT THE ENGINE DOES FOR YOU:
+  * BUDGET is enforced by the engine — don't count calls yourself.
+  * Only actions declared in ACTIONS are reachable.
+  * Parameters are validated before they reach you.
 
-  1. State is per-instance — all mutable values on `self` via `__init__`, so
-     budget never leaks between rollouts.
-  2. Budget enforced HERE, raising RuntimeError. `help` and `spec` are free.
-  3. Unknown modes raise ValueError.
-  4. Nothing is ever printed.
+WHAT YOU MUST DO:
+  * Put ALL per-attempt state in __init__, never at class level.
+  * SEED ANY RANDOMNESS (`random.Random(42)`) — Taiga needs reproducibility.
+  * Never print.
 
 WHY BUDGET A TASK WITH NOTHING HIDDEN: so the model cannot sweep every setting
-and pick the value the results converge to. Brute-forcing the sweep IS the
-method decision — remove the budget and you have removed the task. Set it wide
-enough for a deliberate convergence check, no wider.
+and read off the value results converge to. Brute-forcing the sweep IS the method
+decision — remove the budget and you have removed the task. Wide enough for a
+deliberate convergence check, no wider.
 
-THE `run` MODE MUST NOT JUDGE. Return the computed observation and the settings
-it used. Never say converged/unconverged, never warn that a setting is too
-coarse, never return a residual the model can threshold into a free answer.
-Recognising an unconverged result is the skill being tested.
+`run` MUST NOT JUDGE. Return the observation and the settings used. Never
+converged/unconverged, never a warning that a setting is coarse, never a residual
+the model can threshold into a free answer. Recognising an inadequate setting is
+the skill being tested.
 
-Dependencies: standard library only. If this problem needs a solver package,
-add a `requirements.txt` beside this file and flag it — the gym image must carry
-it.
+Dependencies: standard library only unless the image already carries the package.
 """
-from __future__ import annotations
 
 
 class Oracle:
     """<one line: the system being computed forward>"""
 
-    # --- public: fully disclosed, also stated in problem.md ---------------- #
     BUDGET = 12
 
-    # A forward task has NO `_`-prefixed ground truth. If you find yourself
-    # adding one, you are writing an inverse task — use ../../inverse-task/.
+    # A forward task has NO `_`-prefixed ground truth. If you are adding one,
+    # you are writing an inverse task — use ../../inverse-task/ instead.
 
     ACTIONS = [
         {
             "name": "spec",
             "description": (
                 "Return the complete system definition: geometry, parameters, "
-                "boundary conditions, and the regime. Discloses everything."
+                "conditions, and regime. Discloses everything."
             ),
             "params": {},
             "costs_budget": False,
@@ -60,14 +57,14 @@ class Oracle:
         {
             "name": "run",
             "description": (
-                "Run the forward computation under settings you choose and "
-                "return the resulting observation."
+                "Run the computation under settings you choose and return the "
+                "resulting observation."
             ),
             "params": {
                 "resolution": {
                     "type": "integer",
                     "description": "Discretisation resolution.",
-                    "required": True,
+                    "default": 8,
                 },
                 "method": {
                     "type": "string",
@@ -80,80 +77,74 @@ class Oracle:
         {
             "name": "help",
             "description": "List available modes and remaining budget.",
-            "params": {},
+            "params": {
+                "question": {
+                    "type": "string",
+                    "description": "Unused; accepted for a uniform calling shape.",
+                    "default": "",
+                },
+            },
             "costs_budget": False,
         },
     ]
 
-    def __init__(self) -> None:
+    ANSWER_SCHEMA = {
+        "type": "array",
+        "length": 1,
+        "item_types": ["number"],
+        "description": "Describe the answer shape the model must submit.",
+    }
+
+    def __init__(self):
         self._used = 0
 
-    # ---------------------------------------------------------------- probe #
-    def query(self, mode: str, **params):
-        """Stable probe entry point. Every observation flows through here."""
-        if mode == "help":
-            return {
-                "description": "<one neutral line: what system this computes>",
-                "modes": {
-                    "spec": "{} -> dict",
-                    "run": "{resolution: integer, method: string} -> number",
-                    "help": "{} -> {description, modes, budget_remaining}",
-                },
-                "budget_remaining": self.BUDGET - self._used,
-                "budget_total": self.BUDGET,
-            }
+    # ------------------------------------------------------------- actions #
+    def spec(self):
+        """Free and complete. Withhold nothing about the system.
 
-        if mode == "spec":
-            # Free and complete. Nothing withheld — but say nothing about WHICH
-            # settings to run under. Listing a "default" is fine; calling it
-            # adequate, recommended, or sufficient is a leak.
-            return {
-                "geometry": "<...>",
-                "parameters": {},
-                "boundary_conditions": {},
-                "regime": "<...>",
-                "available_methods": ["<method-a>", "<method-b>"],
-                "resolution_range": [0, 0],
-            }
+        Listing the available methods and the valid resolution range is fine.
+        Calling any of them adequate, recommended, standard, or sufficient is a
+        leak — that is the decision being tested.
+        """
+        return {
+            "geometry": "<...>",
+            "parameters": {},
+            "boundary_conditions": {},
+            "regime": "<...>",
+            "available_methods": ["<method-a>", "<method-b>"],
+            "resolution_range": [0, 0],
+        }
 
-        if mode == "run":
-            if "resolution" not in params:
-                raise ValueError("run requires parameter 'resolution' (integer)")
-            try:
-                resolution = int(params["resolution"])
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"run parameter 'resolution' must be an integer, "
-                    f"got {params['resolution']!r}"
-                ) from None
-            method = str(params.get("method", "<default-method>"))
+    def run(self, resolution: int = 8, method: str = "<default-method>"):
+        """Run the forward computation, honouring the settings given.
 
-            self._spend()
-
-            # TODO: the real forward computation, honouring the settings given.
-            #
-            # It MUST actually depend on them — a coarse resolution has to
-            # return a genuinely different (wrong) number, and it has to do so
-            # WITHOUT crashing or warning. A silent wrong answer is the trap; a
-            # loud one is a hint.
-            observation = ...  # TODO
-
-            # Echo the settings so the model can see what it asked for. Return
-            # no verdict on their adequacy.
-            return {
-                "observation": observation,
-                "resolution": resolution,
-                "method": method,
-            }
-
-        raise ValueError(
-            f"Unknown mode {mode!r}. Available modes: "
-            f"{[a['name'] for a in self.ACTIONS]}"
-        )
-
-    # --------------------------------------------------------------- helpers #
-    def _spend(self) -> None:
-        """Charge one budgeted run. Raises rather than returning when spent."""
-        if self._used >= self.BUDGET:
-            raise RuntimeError(f"Query budget exceeded ({self.BUDGET} calls).")
+        It MUST genuinely depend on them: a coarse resolution has to return a
+        different, wrong number, and it has to do so WITHOUT crashing or warning.
+        A silent wrong answer is the trap; a loud one is a hint.
+        """
         self._used += 1
+        resolution = int(resolution)
+
+        # REPLACE with the real computation. The placeholder is a stand-in for a
+        # discretisation error that shrinks as resolution grows: it converges to
+        # 42.0, and at the default resolution it is off by a full unit while
+        # looking like a perfectly ordinary result.
+        observation = 42.0 - 8.0 / max(resolution, 1)
+
+        # Echo the settings back. Return no verdict on their adequacy.
+        return {
+            "observation": observation,
+            "resolution": resolution,
+            "method": str(method),
+        }
+
+    def help(self, question: str = ""):
+        return {
+            "description": "<one neutral line: what system this computes>",
+            "modes": {
+                "spec": "{} -> dict",
+                "run": "{resolution: integer, method: string} -> dict",
+                "help": "{} -> {description, modes, budget_remaining}",
+            },
+            "budget_remaining": self.BUDGET - self._used,
+        }

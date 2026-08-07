@@ -1,146 +1,128 @@
-"""Hidden oracle for <problem-id>. THE MODEL NEVER SEES THIS FILE.
+"""Hidden system for <problem-id>. THE MODEL NEVER SEES THIS FILE.
 
-The gym imports `Oracle`, constructs ONE INSTANCE PER ATTEMPT, and forwards
-every probe through `query`.
+Ships to Taiga (Preloaded Files). On Taiga it is root-owned and owner-only while
+model-side tools run as uid 1000, so the model can only reach it through the
+probe surface you declare below.
 
-Contract
---------
-    Oracle().query(mode: str, **params) -> observation
+The engine builds a fresh Oracle() per attempt and calls, in order of preference:
+  1. `oracle.evaluate(**params)`        — a method named after the action
+  2. `oracle.query("evaluate", **params)` — a single dispatcher, if you prefer
 
-Four guarantees you MUST uphold. `verify_problems.py` checks every one of them:
+Methods are recommended and are what this template uses.
 
-  1. State is per-instance. Every mutable value lives on `self` via `__init__`,
-     never at module or class level — otherwise budget leaks between rollouts
-     and a fresh Oracle() is not a fresh attempt.
-  2. Budget is enforced HERE. Exhausting it RAISES RuntimeError rather than
-     returning a value, so the limit holds whether or not the caller counts.
-     `help` is always free.
-  3. Unknown modes RAISE ValueError. Only the modes in ACTIONS are reachable,
-     so the probe surface can never drift from what problem.md promises.
-  4. Nothing is ever printed. The return value is the entire interface — a
-     stray print corrupts the stdio transport.
+WHAT THE ENGINE DOES FOR YOU — don't hand-roll these:
+  * BUDGET is enforced by the engine. You do not need to count calls yourself.
+    A call that reaches your oracle and then raises still spends its call.
+    A rejection that never reaches you (unknown action, bad parameter) does not.
+  * Only actions declared in ACTIONS are reachable. Anything you leave out is
+    unreachable — that is how you keep a debug or noisy mode private.
+  * Parameters are validated against your declarations before they reach you.
 
-Naming convention: public constants are stated in problem.md and safe for the
-model to know. `_`-prefixed names are hidden ground truth — never returned,
-not even derived.
+WHAT YOU MUST DO:
+  * Put hidden ground truth in `_`-prefixed names. Solvers and the model cannot
+    read them; the validator proxy raises on access.
+  * Put ALL per-attempt state in __init__, never at class level.
+  * SEED ANY RANDOMNESS (`random.Random(42)`). Taiga runs the same problem many
+    times and needs the environment reproducible.
+  * Never print. The return value is the whole interface.
 
-Dependencies: standard library only. If this problem genuinely needs a
-third-party package, add a `requirements.txt` beside this file, one pinned
-requirement per line, and flag it — the gym image has to carry it.
+THE ORACLE IS AN INSTRUMENT, NOT A GRADER. Return observations — never
+accepted/rejected, never close-enough, never a hint. No `check_*` or
+`validate_*` actions: the model will search against them instead of reasoning.
 
-THE ORACLE IS AN INSTRUMENT, NOT A GRADER. It returns observations. Never
-accepted/rejected, never close-enough, never a hint about the method. If you
-find yourself writing `check_*` or `validate_*`, stop — the model will search
-against it instead of reasoning. See ../INSTRUCTIONS.md.
+Dependencies: standard library only unless the image already carries the package.
 """
-from __future__ import annotations
 
 
 class Oracle:
     """<one line: what the hidden system is, without giving away the answer>"""
 
-    # --- public: stated in problem.md, safe for the model to know ---------- #
+    # Budgeted calls allowed. The engine enforces this. Absent or None =
+    # unlimited, which almost always makes an inverse task too easy.
     BUDGET = 6
 
-    # --- hidden ground truth: never returned, not even derived ------------- #
+    # --- hidden ground truth: `_` prefix makes it unreachable -------------- #
     _SECRET = 42
 
-    # Declares the probe surface. The gym may read this to enumerate modes and
-    # to know which cost budget; `query` works without it, but keep it in sync.
+    # --- public constants: safe for the model, state them in problem.md ---- #
+    # M = 97
+
+    # The probe surface. Each entry becomes a tool the model can call, named
+    # exactly as you name it. `describe_oracle()` renders this for the model, and
+    # the container appends a generated calling guide to your prompt — which is
+    # why problem.md must NOT document the call syntax itself.
     ACTIONS = [
         {
             "name": "evaluate",
             "description": "Return the system's output for your chosen input.",
             "params": {
-                "x": {
-                    "type": "integer",
-                    "description": "The input.",
-                    "required": True,
-                }
+                "x": {"type": "integer", "description": "The input.", "required": True},
             },
             "costs_budget": True,
         },
         {
             # A second informative mode. Multi-mode oracles force the model to
             # CHOOSE which observation is worth spending budget on — one mode
-            # means no decision to make, and no reasoning signal. Replace this
-            # with a genuinely different measurement, not a variant of the first.
+            # means no decision to make and no reasoning signal. Make this a
+            # genuinely different measurement, not a variant of the first.
             "name": "coarse_reading",
             "description": "Return a lower-resolution reading of the same output.",
             "params": {
-                "x": {
-                    "type": "integer",
-                    "description": "The input.",
-                    "required": True,
-                }
+                "x": {"type": "integer", "description": "The input.", "required": True},
             },
             "costs_budget": True,
         },
         {
             "name": "help",
             "description": (
-                "List available modes and remaining budget. Reveals nothing "
-                "about the hidden values or the intended method."
+                "List available modes and remaining budget. Never reveals hidden "
+                "values or the intended method."
             ),
-            "params": {},
+            "params": {
+                "question": {
+                    "type": "string",
+                    "description": "Unused; accepted for a uniform calling shape.",
+                    "default": "",
+                },
+            },
             "costs_budget": False,
         },
     ]
 
-    def __init__(self) -> None:
-        # ALL mutable state here. Add any per-attempt RNG seeded deterministically.
+    # Describes the answer shape. The engine surfaces this via describe_oracle()
+    # so the model knows what to submit — keep it consistent with
+    # golden/expected.json and with the Output format section of problem.md.
+    ANSWER_SCHEMA = {
+        "type": "array",
+        "length": 1,
+        "item_types": ["integer"],
+        "description": "Describe the answer shape the model must submit.",
+    }
+
+    def __init__(self):
+        # ALL per-attempt state here — never at class level, or it leaks between
+        # rollouts. Seed any RNG: self._rng = random.Random(42)
         self._used = 0
 
-    # ---------------------------------------------------------------- probe #
-    def query(self, mode: str, **params):
-        """Stable probe entry point. Every observation flows through here."""
-        if mode == "help":
-            # Lists modes and signatures. Does NOT recommend a mode, and does
-            # NOT describe what each measures in domain terms — that leaks the
-            # method. Free: must not touch self._used.
-            return {
-                "description": "<one neutral line: what kind of system this is>",
-                "modes": {
-                    "evaluate": "{x: integer} -> integer",
-                    "coarse_reading": "{x: integer} -> integer",
-                    "help": "{} -> {description, modes, budget_remaining}",
-                },
-                "budget_remaining": self.BUDGET - self._used,
-                "budget_total": self.BUDGET,
-            }
-
-        if mode == "evaluate":
-            x = self._require_int(params, "x", mode)
-            self._spend()
-            # TODO: replace with the real forward computation of your system.
-            return (x + self._SECRET) % 100
-
-        if mode == "coarse_reading":
-            x = self._require_int(params, "x", mode)
-            self._spend()
-            # TODO: replace. A genuinely different, lossier view of the system.
-            return ((x + self._SECRET) % 100) // 10 * 10
-
-        raise ValueError(
-            f"Unknown mode {mode!r}. Available modes: "
-            f"{[a['name'] for a in self.ACTIONS]}"
-        )
-
-    # --------------------------------------------------------------- helpers #
-    def _spend(self) -> None:
-        """Charge one budgeted probe. Raises rather than returning when spent."""
-        if self._used >= self.BUDGET:
-            raise RuntimeError(f"Query budget exceeded ({self.BUDGET} calls).")
+    # ------------------------------------------------------------- actions #
+    def evaluate(self, x: int):
+        """Replace with your forward map. Return an observation, never the secret."""
         self._used += 1
+        return (int(x) + self._SECRET) % 100
 
-    @staticmethod
-    def _require_int(params: dict, name: str, mode: str) -> int:
-        if name not in params:
-            raise ValueError(f"{mode} requires parameter {name!r} (integer)")
-        try:
-            return int(params[name])
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"{mode} parameter {name!r} must be an integer, "
-                f"got {params[name]!r}"
-            ) from None
+    def coarse_reading(self, x: int):
+        """Replace with a genuinely different, lossier view of the system."""
+        self._used += 1
+        return ((int(x) + self._SECRET) % 100) // 10 * 10
+
+    def help(self, question: str = ""):
+        """List modes and budget. Recommend nothing; explain no physics."""
+        return {
+            "description": "<one neutral line: what kind of system this is>",
+            "modes": {
+                "evaluate": "{x: integer} -> integer",
+                "coarse_reading": "{x: integer} -> integer",
+                "help": "{} -> {description, modes, budget_remaining}",
+            },
+            "budget_remaining": self.BUDGET - self._used,
+        }

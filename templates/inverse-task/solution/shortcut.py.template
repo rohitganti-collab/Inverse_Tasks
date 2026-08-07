@@ -1,19 +1,20 @@
 """Shortcut (trap) solver for <problem-id> — the wrong path, made concrete.
 
-This file MUST FAIL 32/32. If it ever passes, the task is broken: the trap is
-not actually a trap, and you have learned that here rather than from the gate.
+AUTHORING AND CALIBRATION ONLY. Never mount this under Preloaded Files.
 
-It is not enough that it fails. It must fail ONTO THE NAMED NEAR-MISS from
+This file MUST FAIL. `tools/validate_problem.py` runs it and treats a pass as a
+FAIL of the task: a trap that scores 1.0 means the task does not discriminate.
+
+Failing is not enough. It must fail ONTO THE NAMED NEAR-MISS in
 grader/grading_guide.md — that is what makes the ≥60% failure-concentration
 check meaningful. Run it and look at what it returns.
 
-The shortcut has to be genuinely TEMPTING: the error a competent colleague
-would actually make, not a strawman nobody would commit. It should also be
-CHEAPER in budget than the intended path — that is what makes it attractive.
+The shortcut has to be genuinely TEMPTING: the error a competent colleague would
+really make, not a strawman. It should also be CHEAPER in budget than the
+intended path — that is what makes it attractive.
 
-Same contract as main.py: `solve(oracle)` takes a fresh Oracle, returns the
-answer in golden/expected.json's shape. NOT shipped to the gym — this stays on
-the authoring side.
+Same contract and proxy rules as main.py: `solve(oracle)` returns the answer in
+golden/expected.json's shape, and `_`-prefixed attributes raise.
 
 Common shortcuts worth implementing:
   * One mode only, no cross-check against a second observation
@@ -23,21 +24,21 @@ Common shortcuts worth implementing:
   * Ignoring noise / not averaging when the reading is noisy
   * Stopping at the first plausible-looking value
 """
-from __future__ import annotations
 
 
 def solve(oracle):
     """The tempting-but-wrong path. Must land on the named near-miss.
 
     Args:
-        oracle: a fresh Oracle instance.
+        oracle: budgeted proxy over a fresh Oracle instance.
 
     Returns:
         The near-miss answer — right shape, wrong value.
     """
-    # The cheap, naive read. Replace with the trap from reasoning_trap.md.
-    y = oracle.query("evaluate", x=10)
+    # The cheap, unconsidered read. REPLACE with the error from reasoning_trap.md.
+    #
+    # Placeholder: reach for the lower-resolution mode because it looks like the
+    # same measurement, and lose the precision the answer depends on.
+    y = oracle.coarse_reading(0)
 
-    naive_answer = ...  # TODO: the near-miss this produces
-
-    return naive_answer
+    return [y]  # TODO: replace with the near-miss your task produces

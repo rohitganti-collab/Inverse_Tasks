@@ -1,40 +1,37 @@
 """Shortcut (trap) solver for <problem-id> — the default path, made concrete.
 
-This file MUST FAIL 32/32. If it ever passes, the task is broken: the default is
-not actually wrong enough, or the tolerance is too wide.
+AUTHORING AND CALIBRATION ONLY. Never mount this under Preloaded Files.
 
-It must also fail ONTO THE NAMED NEAR-MISS in grader/grading_guide.md — that is
-what makes the ≥60% failure-concentration check meaningful.
+This file MUST FAIL. `tools/validate_problem.py` runs it and treats a pass as a
+FAIL of the task: if the default is not wrong enough, or the tolerance is too
+wide, the task does not discriminate.
+
+It must also fail ONTO THE NAMED NEAR-MISS in grader/grading_guide.md.
 
 For a forward task the shortcut is almost always ONE RUN AT THE DEFAULTS,
-reported without any convergence check. That is what makes it tempting: it is
-cheap, it completes cleanly, and the number looks entirely reasonable.
-
-Same contract as main.py: `solve(oracle)` takes a fresh Oracle and returns the
-answer in golden/expected.json's shape. NOT shipped to the gym.
+reported without any convergence check. That is exactly what makes it tempting:
+it is cheap, it completes cleanly, and the number looks entirely reasonable.
 
 Common forward traps:
-  * Default resolution — unconverged, but the number looks plausible
-  * Default method — steady-state where the physics is transient
+  * Default resolution — unconverged, but plausible
+  * Default method — steady-state where the physics is unsteady
   * No convergence check at all; one run and report
   * A default convention (sign, reference quantity, denominator)
-  * Reporting an instantaneous value where a time-average was required
+  * An instantaneous value where a time-average was required
 """
-from __future__ import annotations
 
 
 def solve(oracle):
     """The default path. Must land on the named near-miss.
 
     Args:
-        oracle: a fresh Oracle instance.
+        oracle: budgeted proxy over a fresh Oracle instance.
 
     Returns:
         The near-miss answer — right shape, wrong value.
     """
     # One run at the defaults. No second run, no convergence check.
-    result = oracle.query("run", resolution=...)  # TODO: the naive default
+    # REPLACE with the default path for your system.
+    result = oracle.run()
 
-    naive_answer = ...  # TODO: the near-miss this produces
-
-    return naive_answer
+    return [result["observation"]]  # TODO: the near-miss your task produces
