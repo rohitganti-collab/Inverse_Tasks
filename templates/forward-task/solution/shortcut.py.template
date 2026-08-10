@@ -2,9 +2,12 @@
 
 AUTHORING AND CALIBRATION ONLY. Never mount this under Preloaded Files.
 
-This file MUST FAIL. `tools/validate_problem.py` runs it and treats a pass as a
-FAIL of the task: if the default is not wrong enough, or the tolerance is too
-wide, the task does not discriminate.
+This file MUST FAIL when run against your intended check (see main.py): if the
+default is not wrong enough, or the tolerance is too wide, the task does not
+discriminate. There is no oracle-based validator to run this through — prove it
+fails yourself:
+
+    python3 solution/shortcut.py
 
 It must also fail ONTO THE NAMED NEAR-MISS in grader/grading_guide.md.
 
@@ -13,7 +16,7 @@ reported without any convergence check. That is exactly what makes it tempting:
 it is cheap, it completes cleanly, and the number looks entirely reasonable.
 
 Common forward traps:
-  * Default resolution — unconverged, but plausible
+  * Default mesh/resolution — unconverged, but plausible
   * Default method — steady-state where the physics is unsteady
   * No convergence check at all; one run and report
   * A default convention (sign, reference quantity, denominator)
@@ -21,17 +24,20 @@ Common forward traps:
 """
 
 
-def solve(oracle):
+def solve():
     """The default path. Must land on the named near-miss.
-
-    Args:
-        oracle: budgeted proxy over a fresh Oracle instance.
 
     Returns:
         The near-miss answer — right shape, wrong value.
     """
     # One run at the defaults. No second run, no convergence check.
     # REPLACE with the default path for your system.
-    result = oracle.run()
+    from main import run_case
 
-    return [result["observation"]]  # TODO: the near-miss your task produces
+    result = run_case()
+
+    return [result]  # TODO: the near-miss your task produces
+
+
+if __name__ == "__main__":
+    print(solve())

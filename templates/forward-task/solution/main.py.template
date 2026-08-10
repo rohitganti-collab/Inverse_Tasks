@@ -2,54 +2,62 @@
 
 AUTHORING AND CALIBRATION ONLY. Never mount this under Preloaded Files.
 
-Contract: `solve(oracle)` returns the answer in the same shape and order as
-golden/expected.json. Return it; do not print it.
+A forward task has no oracle, so there is no engine-run proxy to call this
+through. `tools/validate_problem.py` does not exercise forward tasks yet — this
+file is your own proof that the correct path works, run manually:
 
-The validator runs this through the same budgeted proxy the model uses:
-declared actions work as methods (`oracle.run(resolution=64)`) or via
-`oracle.query("run", resolution=64)`; public constants pass through.
+    python3 solution/main.py
+
+Contract: `solve()` returns the answer in the same shape and order as
+golden/expected.json.
 
 For a forward task the solver's job is the METHOD DECISION, not an inference:
-read the spec, pick settings that are actually adequate, demonstrate the result
-has converged, and only then commit.
+read the inputs in ../simulation/, pick settings that are actually adequate,
+demonstrate the result has converged, and only then commit.
 
   * Justify the settings in a comment. A reviewer must be able to see you did
     not simply pick the setting that happens to match the golden value.
-  * Establish convergence yourself. The oracle will not tell you.
-  * Stay inside BUDGET — the convergence check must fit, and only just.
+  * Establish convergence yourself — nothing warns you if you haven't.
+  * Run the same domain tool the model will have access to on Taiga.
 
 Per the AI Use Policy, Claude implements this from YOUR spec. You review it.
 """
+import subprocess
 
 
-def solve(oracle):
+def run_case(**settings):
+    """Invoke the domain tool named in config.yaml against ../simulation/,
+    under the given settings, and return the observed quantity.
+
+    REPLACE with your tool's actual invocation, e.g.:
+        subprocess.run(["pimpleFoam", "-case", "../simulation"], check=True)
+        # then parse the result out of the case's output files
+    """
+    raise NotImplementedError
+
+
+def solve():
     """Compute the answer correctly.
-
-    Args:
-        oracle: budgeted proxy over a fresh Oracle instance.
 
     Returns:
         The answer, matching golden/expected.json element for element, in order.
     """
-    # 1. Read the full system definition. Free.
-    spec = oracle.spec()
-
-    # 2. Run at settings you can justify — and at least once more, finer, to
+    # 1. Run at settings you can justify — and at least once more, finer, to
     #    SHOW the result has stopped moving.
-    #
-    #    REPLACE: the placeholder system's discretisation error goes as 1/resolution,
-    #    so the default of 8 is nowhere near converged. 512 and 1024 agree to
-    #    well inside tolerance, which is what makes 1024 defensible.
-    coarser = oracle.run(resolution=512)["observation"]
-    finer = oracle.run(resolution=1024)["observation"]
+    coarser = run_case(resolution=512)
+    finer = run_case(resolution=1024)
 
-    # 3. Confirm the two agree within the tolerance in golden/expected.json.
+    # 2. Confirm the two agree within the tolerance in golden/expected.json.
     #    If they do not, you are not converged — refine again.
     if abs(finer - coarser) > 0.01:
         raise AssertionError("not converged: refine further before committing")
 
-    # 4. Post-process into the reported quantity (time-average, integrate,
+    # 3. Post-process into the reported quantity (time-average, integrate,
     #    non-dimensionalise, apply the stated convention).
     answer = [finer]  # TODO: replace with your task's reported quantity
 
     return answer
+
+
+if __name__ == "__main__":
+    print(solve())

@@ -2,3 +2,9 @@
 direction: forward
 domain: <your-domain>
 title: <human-readable title>
+
+# A forward task has no oracle — the model gets simulation/ directly and needs
+# real execution tools to run the domain tool itself. Not read by the engine;
+# this is a note for whoever fills in the Create Problem form's Customize Tools
+# section (e.g. [bash], or a specific domain-tool runner).
+tools_required: [<tool-name>]

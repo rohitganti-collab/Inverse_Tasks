@@ -1,0 +1,9 @@
+# Place forward-task simulation input files in this directory: OpenFOAM case
+# folders, FEniCS meshes, ngspice netlists — whatever your domain tool reads.
+#
+# These files are VISIBLE to the model. They ship as Preloaded Files with
+# "Tell model about uploaded files" turned ON
+# (`augment_prompt_with_input_files: true`) — the opposite of an inverse
+# task's oracle/, which stays hidden and owner-only.
+#
+# Reference every filename you rely on, by name, in problem.md.

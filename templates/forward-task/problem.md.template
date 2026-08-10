@@ -1,5 +1,6 @@
 <!--
-problem.md — THE ONLY TASK CONTENT THE MODEL SEES.
+problem.md — THE ONLY TASK CONTENT THE MODEL SEES, besides the files in
+simulation/ (which the container appends to the prompt automatically).
 
 On Taiga this is either pasted into the Task Prompt form field (preferred) or
 left here as problem.md and shipped. The form wins when both exist.
@@ -10,27 +11,25 @@ and the wrong-path solver has been shown to fail.
 YOU write this, in your own words. Per the AI Use Policy, Claude must never
 draft the solver-facing prompt.
 
-A forward task hides NOTHING about the system — disclose it fully. What you must
-not disclose is WHICH SETTINGS ARE ADEQUATE. That decision is the task.
-
-DO NOT DOCUMENT THE TOOL CALL SYNTAX. The container appends a generated calling
-guide built from your ACTIONS. Name the modes; leave the mechanics to the guide.
+A forward task hides NOTHING about the system — disclose it fully, including
+every file in simulation/. What you must not disclose is WHICH SETTINGS ARE
+ADEQUATE. That decision is the task.
 
 CHECKLIST before saving:
-  [ ] The answer value appears nowhere in this file (the validator fails on it)
+  [ ] The answer value appears nowhere in this file
   [ ] The system is fully specified — geometry, parameters, conditions, regime
-  [ ] No hint that the default resolution/method is inadequate
+  [ ] Every file in simulation/ is named and its role explained
+  [ ] No hint that the default mesh/resolution/solver is inadequate
   [ ] No "you should refine", "check convergence", "use the transient solver"
   [ ] No method name that hands over the solver choice
-  [ ] Resolution / method / stopping decisions left entirely to the model
+  [ ] Mesh / method / stopping decisions left entirely to the model
   [ ] Not a canonical setup whose answer can be recalled from literature
   [ ] Clear of the validator's leakage vocabulary — INSTRUCTIONS.md lists the
       words it flags in solver-visible text
-  [ ] The budget is stated and matches Oracle.BUDGET
-  [ ] Mode names match your ACTIONS names
-  [ ] Answer shape matches golden/expected.json and Oracle.ANSWER_SCHEMA
+  [ ] Answer shape matches golden/expected.json
   [ ] Tolerance and units stated
   [ ] Any convention that matters (sign, reference quantity, denominator) IS stated
+  [ ] Explicit instruction to call submit_answer(answer)
 
 State the CONVENTION, so a correct solver isn't guessing what you want, but never
 the METHOD, so the solver still has to decide how to get there. Both matter, and
@@ -51,22 +50,16 @@ DELETE THIS COMMENT BLOCK before you upload — problem.md ships as written.
      and you will need a transient solver"). The first is the setup. The second
      is the answer to the question being asked. -->
 
-# What you can use
+# Input files
 
-<!-- Name the modes and state the budget. Do NOT write out call signatures. -->
-
-You can inspect the complete system definition for free, and run the computation
-under settings you choose. A free `help` mode reports the available modes and
-your remaining budget.
-
-Budgeted runs may be used at most **<N>** times in total.
-
-<!-- <N> must equal Oracle.BUDGET. -->
+<!-- Name every file in simulation/ and what it is (case folder, mesh, netlist,
+     config). Say nothing about which of its settings are adequate. -->
 
 # Your task
 
-<!-- State exactly which quantity to report. One paragraph. Say nothing about
-     how to compute it or what settings to use. -->
+<!-- State exactly which quantity to report, and that you expect the model to
+     run the domain tool itself. One paragraph. Say nothing about how to
+     configure the run. -->
 
 # Output format
 
