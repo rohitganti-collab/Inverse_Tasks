@@ -1,0 +1,54 @@
+"""solution/main.py — the intended solver.
+
+Proves the task is solvable within budget, and pins the intended path so a
+reviewer can see what "correct" means here.
+
+CONTRACT
+--------
+    def solve(oracle) -> answer
+
+The validator hands you a budgeted proxy, not the raw oracle, so this runs
+through exactly the path the model does:
+
+    oracle.measure(setting=1.0)            declared actions, as methods
+    oracle.query("measure", setting=1.0)   or via the dispatcher
+    oracle.NOISE_SIGMA_REL                 public constants pass through
+    oracle._TRUE_PARAM_A                   RAISES — you may not read the answer
+
+Return the answer in the same shape as golden/expected.json.
+
+Authoring and calibration only. Never mounted under Preloaded Files, never
+shipped in the image.
+
+RULES
+-----
+  * Query the oracle. Never hardcode the hidden parameters.
+  * Use the tool named in config.yaml if your task declares one.
+  * Stay inside budget — the validator reports what you spent.
+  * Include the validation step from your STATE.md "Order of decisions". The
+    intended path is not just "gets the right answer", it is the path you claim
+    a competent practitioner would follow, and that includes confirming before
+    committing.
+"""
+from __future__ import annotations
+
+
+def solve(oracle):
+    # 1. Free reconnaissance: what modes exist, how much budget is left.
+    _ = oracle.query("help")
+
+    # 2. The measurements your STATE.md says come first.
+    #    TODO: replace with your intended path.
+    first = oracle.measure(setting=0.0)
+
+    # 3. The measurement that discriminates. TODO.
+    second = oracle.measure_gradient(setting=0.0)
+
+    # 4. Invert observations -> parameters. TODO.
+    param_a = first["reading"]
+    param_b = -second["reading"] / first["reading"]
+
+    # 5. Validate before committing: predict a point you have not used, measure
+    #    it, and check. TODO — make this a real check, not a formality.
+
+    return [param_a, param_b]

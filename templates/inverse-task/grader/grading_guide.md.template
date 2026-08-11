@@ -1,0 +1,31 @@
+# Grading guide — <task name>
+
+<!-- You own this file. Claude may not write it or reformat it. -->
+
+**Golden answer:**
+
+<!-- Paste it in the exact format problem.md asks for. -->
+
+## Acceptance criteria
+
+<!-- Tolerance and why it is the number it is: strictly tighter than the
+     distance to the nearest near-miss below, strictly looser than your
+     intended solver's spread across noise seeds. Units. Format rules. -->
+
+## Near-miss table
+
+<!-- One row per plausible wrong answer, from STATE.md "Candidate jobs".
+     Mark which one is the trap. -->
+
+| Submitted | Looks right because | Why it loses |
+|---|---|---|
+| `<the answer>` | | — this is the answer |
+| `<near-miss 1>` | | **This is the trap** (`solution/shortcut.py`) |
+| `<near-miss 2>` | | |
+| `<near-miss 3>` | | |
+
+## Edge cases
+
+<!-- Alternate accepted forms. What to do with a partially-correct submission.
+     What to reject outright (a range instead of a value, two candidates, a
+     unit conversion). -->

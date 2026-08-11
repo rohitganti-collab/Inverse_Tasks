@@ -1,0 +1,10 @@
+# Task metadata. Keep values clean — no inline comments after a value.
+#
+# `direction` must match the folder: a forward task has a non-empty simulation/
+# and NO oracle/setup.py. The validator fails the problem if they disagree.
+
+direction: forward
+domain: TODO            # your assigned domain
+sub_domain: TODO        # e.g. cfd, fem_analysis, reaction_kinetics
+simulator: TODO         # the pinned tool the model must run, e.g. openfoam, ngspice
+title: TODO             # one short line, shown in listings

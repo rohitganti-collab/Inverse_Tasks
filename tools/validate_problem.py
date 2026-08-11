@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
-"""Validate expert-authored inverse-task problems against the engine contract.
+"""Validate expert-authored problems against the engine contract.
 
 Run this before uploading a problem to Taiga:
 
     python3 tools/validate_problem.py                    # every problem
     python3 tools/validate_problem.py modular-black-box   # just one
 
-Checks, per problem:
+Inverse tasks (`oracle/setup.py`):
   contract    — oracle loads, declares a usable probe surface, budget sane
   golden      — golden/expected.json parses and matches the declared answer shape
-  intended    — solution/main.py::solve passes, inside budget
-  shortcut    — solution/shortcut.py::solve fails (a trap that isn't a trap
-                is a broken task)
+  intended    — solution/main.py::solve(oracle) passes, inside budget
+  shortcut    — solution/shortcut.py::solve(oracle) fails (a trap that isn't a
+                trap is a broken task)
   budget      — the budget is actually enforced
   leakage     — the answer isn't printed in problem.md, and no hint/description
                 names the method or the trap
   packaging   — the files the Docker image ships are all present
+
+Forward tasks (`simulation/`, no oracle):
+  inputs      — simulation/ exists and is non-empty
+  golden      — as above
+  intended    — solution/main.py::solve(simulation_dir) passes
+  shortcut    — solution/shortcut.py::solve(simulation_dir) fails
+  leakage     — the answer isn't printed in problem.md, and the prompt doesn't
+                hand over the method/discretisation choice being tested
+  packaging   — as above, with simulation/ in place of oracle/
 
 Exit code is non-zero if any problem has a FAIL. WARNs are advisory: they flag
 things a human should look at (e.g. a hint that may give away the method).
@@ -38,6 +47,7 @@ import core  # noqa: E402
 # Runtime files the container needs. problem.md is optional when the Task Prompt
 # is supplied on the Taiga form.
 SHIPPED_FILES = ("oracle/setup.py", "golden/expected.json")
+SHIPPED_FILES_FORWARD = ("golden/expected.json",)
 
 # Words that, in a *solver-visible* string, risk naming the method or the trap.
 # Advisory only — the expert decides. See step 8 of the authoring instructions.
@@ -52,6 +62,22 @@ LEAKAGE_TERMS = (
     "don't use",
     "do not use",
     "the trick",
+)
+
+# Forward-task equivalent: phrases that hand over the method/discretisation
+# decision the task exists to test. Advisory only.
+LEAKAGE_TERMS_FORWARD = LEAKAGE_TERMS + (
+    "refine the mesh",
+    "mesh refinement",
+    "too coarse",
+    "use a transient",
+    "steady-state is",
+    "converged",
+    "convergence check",
+    "time step",
+    "timestep",
+    "stability criterion",
+    "must be smaller than",
 )
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -177,6 +203,33 @@ def validate(problem_id: str, directory: Path, roots) -> Report:
         return report
 
     problem = session.problem
+
+    # ---- direction ---------------------------------------------------------- #
+    # The engine decides direction from structure; config.yaml is documentation.
+    # When they disagree, one of the two is a typo and the expert should know.
+    declared = core.read_direction(directory)
+    if declared and declared not in ("inverse", "forward"):
+        report.add(
+            WARN,
+            "direction: config.yaml value understood",
+            f"direction: {declared!r} is neither 'inverse' nor 'forward'; the engine "
+            f"is treating this as {problem.direction}.",
+        )
+    elif declared and declared != problem.direction:
+        report.add(
+            FAIL,
+            "direction: config.yaml matches the folder",
+            f"config.yaml says direction: {declared}, but the folder looks "
+            f"{problem.direction} "
+            f"({'oracle/setup.py present' if problem.direction == 'inverse' else 'simulation/ present, no oracle'}).",
+        )
+    else:
+        report.add(PASS, f"direction: {problem.direction}")
+
+    if problem.direction == "forward":
+        _validate_forward(report, problem, directory)
+        return report
+
     names = [a["name"] for a in problem.actions]
     if not problem.actions_declared:
         report.add(
@@ -409,6 +462,150 @@ def validate(problem_id: str, directory: Path, roots) -> Report:
     return report
 
 
+def _validate_forward(report: Report, problem, directory: Path) -> None:
+    """Checks for a forward task: no oracle, inputs handed to the model directly.
+
+    The solver contract mirrors the inverse one but takes the input directory
+    instead of an oracle proxy:
+
+        def solve(simulation_dir: Path) -> answer
+
+    There is no budget and no probe surface, so difficulty has to live entirely
+    in the method decision the prompt declines to make for the model. The
+    shortcut solver is what proves that decision actually matters.
+    """
+    simulation = directory / "simulation"
+    files = problem.simulation_files
+    if not files:
+        report.add(
+            FAIL,
+            "inputs: simulation/ is non-empty",
+            f"{simulation} has no files. A forward task must hand the model "
+            "something to run.",
+        )
+        return
+    report.add(PASS, f"inputs: simulation/ ships {len(files)} file(s): {files[:6]}")
+
+    try:
+        golden = problem.golden()
+    except core.InverseTaskError as exc:
+        report.add(FAIL, "golden: expected.json", str(exc))
+        return
+
+    shape = problem.answer_shape()
+    shape_problems = core.check_answer_shape(golden["answer"], shape)
+    if shape_problems:
+        report.add(
+            FAIL,
+            "golden: matches inferred answer shape",
+            "; ".join(shape_problems) + f" (shape: {json.dumps(shape, sort_keys=True)})",
+        )
+    else:
+        report.add(PASS, f"golden: shape {json.dumps(shape, sort_keys=True)}")
+
+    if golden.get("tolerance", 0) == 0 and shape.get("type") in ("number", "array"):
+        report.add(
+            WARN,
+            "golden: tolerance is 0 on a floating-point answer",
+            "A simulation result rarely reproduces bit-for-bit across platforms. "
+            "Set a tolerance derived from the distance to your nearest near-miss, "
+            "or state the required rounding in problem.md.",
+        )
+
+    # ---- solvers ----------------------------------------------------------- #
+    intended = _load_solver(directory / "solution" / "main.py")
+    if intended is None:
+        report.add(
+            WARN,
+            "intended: solution/main.py",
+            "No intended solver — nothing proves the task is solvable from the "
+            "inputs alone.",
+        )
+    else:
+        answer, error = _run_forward_solver(intended, simulation)
+        if error:
+            report.add(FAIL, "intended: solve() runs", error)
+        elif core.compare_answers(answer, golden)["correct"]:
+            report.add(PASS, f"intended: passes (returned {json.dumps(answer)})")
+        else:
+            report.add(
+                FAIL,
+                "intended: passes",
+                f"returned {json.dumps(answer)}, expected {json.dumps(golden['answer'])}",
+            )
+
+    shortcut = _load_solver(directory / "solution" / "shortcut.py")
+    if shortcut is None:
+        report.add(
+            WARN,
+            "shortcut: solution/shortcut.py",
+            "No shortcut solver. For a forward task this is the only evidence that "
+            "the default method choice actually fails — without it the task may be "
+            "testing nothing but the ability to run the tool.",
+        )
+    else:
+        answer, error = _run_forward_solver(shortcut, simulation)
+        if error:
+            report.add(PASS, f"shortcut: fails ({error})")
+        else:
+            verdict = core.compare_answers(answer, golden)
+            if verdict["correct"]:
+                report.add(
+                    FAIL,
+                    "shortcut: fails",
+                    f"the shortcut PASSED with {json.dumps(answer)} — the naive "
+                    "method choice gets the right answer, so the task does not "
+                    "discriminate",
+                )
+            else:
+                report.add(
+                    PASS, f"shortcut: fails as intended (returned {json.dumps(answer)})"
+                )
+
+    # ---- leakage ------------------------------------------------------------ #
+    prompt = problem.prompt
+    leaked = _answer_literals_in(prompt, golden["answer"])
+    if leaked:
+        report.add(
+            FAIL,
+            "leakage: answer absent from problem.md",
+            f"problem.md contains the answer value(s) {leaked}.",
+        )
+    else:
+        report.add(PASS, "leakage: answer not printed in problem.md")
+
+    suspicious = [
+        term
+        for term in LEAKAGE_TERMS_FORWARD
+        if re.search(rf"\b{re.escape(term)}\b", prompt, re.IGNORECASE)
+    ]
+    if suspicious:
+        report.add(
+            WARN,
+            "leakage: problem.md may hand over the method choice",
+            f"found {suspicious}\n           A forward task's difficulty IS the "
+            "discretisation/solver/convergence decision. Naming it removes the task.",
+        )
+    else:
+        report.add(PASS, "leakage: no method vocabulary in problem.md")
+
+    missing = [f for f in SHIPPED_FILES_FORWARD if not (directory / f).is_file()]
+    if missing:
+        report.add(FAIL, "packaging: image files present", f"missing {missing}")
+    else:
+        report.add(
+            PASS, f"packaging: ships {list(SHIPPED_FILES_FORWARD)} + simulation/"
+        )
+
+
+def _run_forward_solver(solver, simulation: Path) -> tuple[Optional[Any], Optional[str]]:
+    """Run a forward solver against the input directory. Returns (answer, error)."""
+    try:
+        return solver(simulation), None
+    except Exception as exc:  # noqa: BLE001 - report any solver failure verbatim
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _dummy_params(action: dict[str, Any]) -> dict[str, Any]:
     """Plausible arguments for probing an action during validation."""
     sample = {"integer": 0, "number": 0.0, "string": "", "boolean": False, "array": [], "object": {}}
@@ -449,12 +646,34 @@ def taiga_form_values(problem_id: str, directory: Path) -> str:
         if has_prompt
         else "write the task prompt here — this problem folder has no problem.md"
     )
+    direction = core.detect_direction(directory)
+
+    if direction == "forward":
+        return "\n".join(
+            [
+                f"\n--- Taiga Create Problem form values for {problem_id} (FORWARD) ---",
+                f"  Problem ID        {problem_id}",
+                f"  Task Prompt       {prompt_note}",
+                "  Tools             bash   (the model MUST be able to run the tool)",
+                "  Grading Strategy  mcp   (NOT Agentic Grader, NOT Rubric Itemwise)",
+                "  Docker Image      an image that contains your domain toolchain",
+                "                    (see docs/TAIGA_RUNBOOK.md §7 — the default",
+                "                     inverse-tasks image has no scientific tools)",
+                "  Startup Command   python -u /app/mcp_server/server.py",
+                f"  Preloaded Files   mount simulation/ + golden/ at /mnt/problems/{problem_id}/",
+                "                    NEVER mount solution/, BRIEF, STATE, or reasoning_trap",
+                "  Supporting Files  optional human review only (NOT mounted)",
+                "  Tell model about uploaded files   ON   (it must know the inputs exist)",
+                "  Security          golden/ stays root-only; bash runs as uid 1000",
+            ]
+        )
+
     return "\n".join(
         [
-            f"\n--- Taiga Create Problem form values for {problem_id} ---",
+            f"\n--- Taiga Create Problem form values for {problem_id} (INVERSE) ---",
             f"  Problem ID        {problem_id}",
             f"  Task Prompt       {prompt_note}",
-            "  Tools             (leave empty unless the task truly needs one)",
+            "  Tools             EMPTY   (delete bash and str_replace_editor)",
             "  Grading Strategy  mcp   (NOT Agentic Grader, NOT Rubric Itemwise)",
             "  Docker Image      the published inverse-tasks image",
             "  Startup Command   python -u /app/mcp_server/server.py",

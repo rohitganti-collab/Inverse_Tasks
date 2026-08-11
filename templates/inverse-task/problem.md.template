@@ -1,0 +1,50 @@
+<!--
+problem.md — the only thing the model sees.
+
+WRITE THIS LAST. Not before the answer is locked, the oracle is built, the
+shortcut is proven to fail, and the validator is clean. A prompt written early
+gets written around the task you imagined instead of the one you built.
+
+YOU own this file. Claude may not draft it, and may not reformat or proofread
+it either — the wording is the deliverable.
+
+You do NOT need to document the tool-calling syntax. The container generates a
+calling guide from your ACTIONS and appends it automatically, so the mechanics
+the model is told always match the mechanics that are published.
+
+CHECKLIST before you validate:
+  [ ] No method names (Lineweaver-Burk, DMRG, AlphaFold2, ridge regression, ...)
+  [ ] No canonical targets (formaldehyde, 2D Ising at T_c, the repressilator, ...)
+  [ ] No strategy hints ("start by measuring ...", "the best approach is ...")
+  [ ] Nothing that names the trap or gestures at the fix
+  [ ] The answer space is stated, so the answer is unique over it
+  [ ] Answer format explicit: order, units, decimal places, separator
+  [ ] Any convention that matters is stated (sign, gauge, denominator, rounding)
+  [ ] Budget stated
+  [ ] Tool names here match your ACTIONS names exactly
+
+Delete this comment block before shipping.
+-->
+
+# Task setup
+
+<!-- One paragraph. The system, what is known about it, what is hidden. Written
+     the way you would brief a colleague who is about to sit at the instrument:
+     enough to reason, nothing about how. -->
+
+# What you can use
+
+<!-- What the probes do, in operational terms, and the budget. Describe the
+     instrument, not the physics it reveals. -->
+
+# Your task
+
+<!-- Exactly what to determine. -->
+
+# Output format
+
+<!-- The exact shape. Be pedantic: order, units, precision.
+     e.g. "A JSON array of three numbers in this order: Vmax, Km, Ki. Vmax in
+     uM/min, Km and Ki in uM, each to 3 significant figures." -->
+
+Submit your answer via `submit_answer(answer)`.

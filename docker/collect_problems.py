@@ -10,7 +10,8 @@ What ships, per problem:
     problem.md              the task prompt
     config.yaml             display metadata (optional)
     oracle/**               the hidden system, including any helper modules
-                            and data files it imports
+                            and data files it imports          [inverse only]
+    simulation/**           the input files the model is given [forward only]
     golden/expected.json    the graded answer
     grader/grade.py         optional custom grader (and helper .py beside it)
 
@@ -19,6 +20,9 @@ What never ships:
     grader/grading_guide.md the near-miss table — names the trap outright
     BRIEF.md STATE.md reasoning_trap.md   authoring and calibration notes
     anything else at the top level of the problem folder
+
+A problem qualifies if it has a golden answer plus either an oracle (inverse)
+or a simulation directory (forward).
 
 usage: collect_problems.py SRC DEST
 """
@@ -29,7 +33,7 @@ import sys
 from pathlib import Path
 
 ALLOWED_FILES = ("problem.md", "config.yaml")
-ALLOWED_DIRS = ("oracle", "golden")
+ALLOWED_DIRS = ("oracle", "simulation", "golden")
 ALLOWED_GRADER_SUFFIXES = (".py",)
 SKIP_DIR_NAMES = {"__pycache__"}
 
@@ -41,8 +45,15 @@ def collect(src: Path, dest: Path) -> int:
         if problem_dir.name.startswith(("_", ".")):
             print(f"  skip {problem_dir.name}/ (reserved prefix)")
             continue
-        if not (problem_dir / "oracle" / "setup.py").is_file():
-            print(f"  skip {problem_dir.name}/ (no oracle/setup.py)")
+        has_oracle = (problem_dir / "oracle" / "setup.py").is_file()
+        has_simulation = (problem_dir / "simulation").is_dir() and any(
+            p.is_file() for p in (problem_dir / "simulation").rglob("*")
+        )
+        if not has_oracle and not has_simulation:
+            print(
+                f"  skip {problem_dir.name}/ "
+                "(needs oracle/setup.py for inverse, or a non-empty simulation/ for forward)"
+            )
             continue
         if not (problem_dir / "golden" / "expected.json").is_file():
             print(f"  skip {problem_dir.name}/ (no golden/expected.json)")

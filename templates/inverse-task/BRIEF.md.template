@@ -1,0 +1,17 @@
+# BRIEF — <task name>
+
+**Domain:**
+**Sub-domain:**
+**Tool:**
+**Direction:** Inverse
+
+## The idea
+
+<!-- One paragraph, in your own words. What is the hidden system? What must the
+     model infer? Why is this a real inverse problem rather than a forward one
+     with the answer covered up? What makes it non-trivial for someone who
+     knows the field? -->
+
+## What the model must report
+
+<!-- The exact output: quantities, order, units, precision. -->

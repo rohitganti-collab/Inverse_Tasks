@@ -1,0 +1,8 @@
+{
+  "answer": 0.0,
+  "tolerance": 0.0,
+  "scoring": "binary",
+  "_comment_answer": "TODO: the graded answer. Delete these _comment_ keys.",
+  "_comment_tolerance": "Absolute tolerance. For a forward task this has to straddle two things at once: WIDER than the spread of your own reference solver across reasonable grids, time steps and solver choices (measure this — record the table in STATE.md), and TIGHTER than the distance to the naive-method answer in solution/shortcut.py. A simulation result almost never reproduces bit-for-bit across platforms, so tolerance 0 is usually wrong unless the answer is an integer or a label.",
+  "_comment_scoring": "binary = 1.0 only if everything matches. Keep binary unless partial credit is deliberate."
+}

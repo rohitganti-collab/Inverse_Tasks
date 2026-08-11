@@ -1,0 +1,25 @@
+# Reasoning trap
+
+<!-- You own this file. Claude may not write it or reformat it. -->
+
+## The trap
+
+<!-- One paragraph. Which default, standard treatment, or reasonable-looking
+     simplification produces a confident wrong answer here?
+
+     Say why it is invisible: the run converges, the residuals fall, the solver
+     reports success, the number is the right order of magnitude. A forward trap
+     that announces itself with a crash or a NaN is not a trap. -->
+
+## Why refinement does not rescue it
+
+<!-- The key question for a forward task. If the naive answer converges to the
+     correct one under refinement, this is a resolution issue and a model with
+     enough compute will walk straight past it. Explain why the error survives
+     at any resolution — because it is a modelling choice, not a discretisation
+     error. If you cannot explain that, redesign the trap. -->
+
+## Why a careful solver succeeds
+
+<!-- One paragraph. What is the check that separates the two paths, and why
+     would a practitioner think to make it? -->

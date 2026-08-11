@@ -1,0 +1,63 @@
+# STATE — <task name>
+
+<!-- You own this file. Not mounted into the container; it is what a reviewer
+     and the blind-QA expert read. -->
+
+## Why this answer is the only answer
+
+<!-- For a forward task, uniqueness is about the QUESTION, not the system —
+     the system is fully specified, so the solution exists and is unique.
+     What has to be argued is that the quantity you asked for is unambiguous:
+     over what interval, at what point, in what frame, with what convention.
+
+     Write out the definition precisely, then read problem.md back and check it
+     forces that definition and no other. Ambiguity here is the single most
+     common reason a forward task fails QA — two competent people compute two
+     different, defensible numbers. -->
+
+## Discretisation independence
+
+<!-- Playbook step 7 for forward tasks. Fill in real measurements from
+     solution/main.py.
+
+| grid | time step | reported value |
+|---|---|---|
+| | | |
+| | | |
+| | | |
+
+Spread across reasonable discretisations: ___
+Distance to the nearest near-miss:        ___
+Tolerance chosen:                         ___   (must sit strictly between) -->
+
+## Candidate jobs
+
+<!-- Every plausible wrong answer, with one sentence on why it loses. At least
+     one must be the answer a competent practitioner gets on a normal day.
+
+     Cross-check: each row here should have a row in
+     grader/grading_guide.md. -->
+
+## Wrong paths catalogue
+
+<!-- The method choices that produce each wrong answer. The modal one is your
+     trap and goes in solution/shortcut.py. State, for each, whether refinement
+     rescues it — anything that converges to the right answer is a speed bump,
+     not a trap. -->
+
+## Calibration
+
+<!-- See docs/CALIBRATION.md for the gate.
+
+| Check | Requirement | Result |
+|---|---|---|
+| intended solver | passes | |
+| shortcut solver | fails | |
+| answer stable across grid and time step | yes | |
+| tolerance < distance to nearest near-miss | yes | |
+| Taiga pass rate | in band, N=32 | |
+| failure concentration on the named near-miss | >= 60% | |
+| artefact failure rate | <= 10% | |
+
+Forward tasks run EASIER than inverse ones on the same ensemble. Budget for a
+hardening pass; do not be surprised by a first measurement above the band. -->

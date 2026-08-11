@@ -1,0 +1,217 @@
+"""oracle/setup.py — THE HIDDEN SYSTEM. The model never sees this file.
+
+This is the one file that has to be right: both the local validator and the
+Taiga MCP engine load it, and it is the only thing standing between the model
+and the answer.
+
+CONTRACT
+--------
+Define a class named `Oracle`. Declare your probe surface in `ACTIONS`; each
+entry becomes a tool the model can call, named exactly as you name it. The
+engine handles budget accounting, parameter validation, and dispatch.
+
+    Oracle().<action>(**params)          preferred
+    Oracle().query(action, **params)     also supported, if you'd rather have
+                                         one dispatcher
+
+Hidden ground truth goes in `_leading_underscore` attributes. The validator's
+proxy raises on any private attribute, so your own intended solver cannot
+"prove" the task works by reading `_TRUE_PARAM_A` directly.
+
+RULES (the validator checks most of these)
+------------------------------------------
+  * Return observations, never judgments. No `check_*`, no `validate_*`, no
+    `{"correct": ...}`, no "close enough", no hints. If you are writing a
+    comparison against the answer, you are building a grader, and the model
+    will search against it instead of reasoning.
+  * At least two informative modes, plus `help`. One mode means the model has
+    no measurement decision to make — and the measurement decision is the task.
+  * `help` lists modes and signatures. It does NOT recommend a mode and does
+    NOT say what a mode measures in domain-physics terms. That is a method leak.
+  * Domain-realistic noise. A clean signal makes inversion trivial; too much
+    makes it impossible. Tune it. Seed it.
+  * A budget tight enough that brute force loses and the intended path barely
+    fits.
+  * Never return a hidden parameter, or any single value it can be recovered
+    from in one step.
+
+REPRODUCIBILITY
+---------------
+A fresh `Oracle()` is constructed per attempt, so per-attempt state belongs in
+`__init__`, never at module level. Seed every RNG — Taiga runs the same problem
+many times and a reward that moves between runs is not a reward.
+
+The example below is a placeholder two-observable system so the file runs as
+shipped. Replace every TODO before validating.
+"""
+from __future__ import annotations
+
+import math
+import random
+
+
+class Oracle:
+    # ------------------------------------------------------------------ #
+    # Budget. Derive it from your intended path, not from a round number:
+    #     cost(shortcut) < BUDGET < cost(brute force)
+    #     cost(intended) <~ BUDGET
+    # If a model can afford to try everything, the task is broken.
+    # ------------------------------------------------------------------ #
+    BUDGET = 12
+
+    # ------------------------------------------------------------------ #
+    # Hidden ground truth. TODO: replace with your task's true values.
+    # Underscore-prefixed = unreachable by the model and by solvers.
+    # ------------------------------------------------------------------ #
+    _TRUE_PARAM_A = 1.234
+    _TRUE_PARAM_B = 0.567
+
+    # Public constants. Anything you state in problem.md may live here;
+    # solvers and the model's help output may read these.
+    NOISE_SIGMA_REL = 0.02
+
+    # ------------------------------------------------------------------ #
+    # The probe surface. Declare only what problem.md tells the solver to
+    # call — anything you leave out is unreachable, which is how you keep a
+    # debug mode private.
+    #
+    # Fields: name (required) · description · params · costs_budget
+    #         (default True) · method (if the oracle method is named
+    #         differently).
+    # Param types: integer, number, string, boolean, array, object.
+    # ------------------------------------------------------------------ #
+    ACTIONS = [
+        {
+            # TODO: name it after the instrument, not the physics.
+            "name": "measure",
+            "description": (
+                # TODO: describe the OPERATION, not the method. "Return a
+                # reading at the chosen setting" — never "sample the decay
+                # curve so you can fit an exponential".
+                "Take a reading at the chosen setting."
+            ),
+            "params": {
+                "setting": {
+                    "type": "number",
+                    "description": "Where to take the reading.",
+                    "required": True,
+                },
+                "replicates": {
+                    "type": "integer",
+                    "description": "How many readings to average.",
+                    "default": 1,
+                },
+            },
+            "costs_budget": True,
+        },
+        {
+            # TODO: a genuinely different observable — not the first one
+            # rescaled. If both modes answer the same question, the model has
+            # no decision to make and you have a one-mode oracle.
+            "name": "measure_gradient",
+            "description": "Take a reading of the other observable at the chosen setting.",
+            "params": {
+                "setting": {"type": "number", "required": True},
+            },
+            "costs_budget": True,
+        },
+        {
+            "name": "help",
+            "description": "List the available modes and your remaining budget.",
+            "params": {"question": {"type": "string", "default": ""}},
+            "costs_budget": False,
+        },
+    ]
+
+    # Optional but recommended: pins the shape the model must submit, so the
+    # generated prompt guide shows the right example and the validator can
+    # check your golden answer against it.
+    ANSWER_SCHEMA = {
+        "type": "array",
+        "length": 2,
+        "item_types": ["number"],
+        "keys": ["param_a", "param_b"],
+        "description": "TODO: state the answer shape and order.",
+    }
+
+    def __init__(self) -> None:
+        # Per-attempt state only. Seeded so every run is identical.
+        self._rng = random.Random(20260811)
+
+    # -- the hidden physics ----------------------------------------------- #
+
+    def _true_response(self, setting: float) -> float:
+        """The forward model. TODO: replace with your domain physics.
+
+        Import the real tool here if you have one (scipy, ngspice, obspy, ...)
+        and list it in requirements.txt.
+        """
+        return self._TRUE_PARAM_A * math.exp(-self._TRUE_PARAM_B * setting)
+
+    def _true_gradient(self, setting: float) -> float:
+        """TODO: your second, independent observable."""
+        return -self._TRUE_PARAM_B * self._true_response(setting)
+
+    def _noisy(self, value: float, replicates: int = 1) -> float:
+        """Domain-realistic noise, averaged down by replicates.
+
+        Replicates that cost budget turn precision into a spending decision:
+        one careful reading or several rough ones. That is a real experimental
+        design choice and it costs you nothing to offer.
+
+        TODO: match the noise model to your domain — gaussian here, 1/f for
+        time series, Poisson for counting, plus any systematic offset.
+        """
+        replicates = max(1, int(replicates))
+        sigma = self.NOISE_SIGMA_REL * abs(value) / math.sqrt(replicates)
+        return value + self._rng.gauss(0.0, sigma)
+
+    # -- the declared actions ---------------------------------------------- #
+
+    def measure(self, setting: float, replicates: int = 1):
+        # Raw observations with units. Never a verdict.
+        return {
+            "setting": setting,
+            "reading": self._noisy(self._true_response(setting), replicates),
+            "unit": "TODO",  # TODO: state the unit here AND in problem.md
+        }
+
+    def measure_gradient(self, setting: float):
+        return {
+            "setting": setting,
+            "reading": self._noisy(self._true_gradient(setting)),
+            "unit": "TODO",
+        }
+
+    def help(self, question: str = ""):
+        """Signatures and budget only.
+
+        Saying what a mode is "good for" is a method leak: working out which
+        observation is informative is most of the task.
+        """
+        return {
+            "description": "TODO: one neutral line about what kind of system this is.",
+            "modes": {
+                action["name"]: sorted((action.get("params") or {}).keys())
+                for action in self.ACTIONS
+            },
+            "budget_total": self.BUDGET,
+        }
+
+    # -- optional single dispatcher ----------------------------------------- #
+
+    def query(self, mode: str, **params):
+        """Kept so local scripts can call the oracle the way the model does.
+
+        The engine prefers the named methods above; this is a convenience. Its
+        signature must accept every parameter any action declares — a
+        `query(self, mode, x=None)` cannot service an action that declares a
+        `question` parameter, and the validator will tell you so.
+        """
+        if mode == "measure":
+            return self.measure(**params)
+        if mode == "measure_gradient":
+            return self.measure_gradient(**params)
+        if mode == "help":
+            return self.help(params.get("question", ""))
+        raise ValueError(f"Unknown mode: {mode!r}")

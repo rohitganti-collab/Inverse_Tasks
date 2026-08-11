@@ -1,0 +1,59 @@
+# STATE — <task name>
+
+<!-- The working record of playbook steps 1-4 and your calibration evidence.
+     You own this file. It is not mounted into the container; it is what a
+     reviewer reads to follow your reasoning, and what a second expert
+     re-derives against during blind QA. -->
+
+## Why this answer is the only answer
+
+<!-- Playbook step 1. Not "why this answer is defensible" — why no other value
+     reproduces the observations.
+
+     State the answer space explicitly and prove uniqueness OVER THAT SPACE. If
+     your observations only pin the answer up to some equivalence (a modulus, a
+     sign, a scale factor, a permutation), either constrain the space in
+     problem.md or grade the invariant instead. "The intended answer is
+     obviously the canonical one" is a convention, not an argument, and it is
+     the most common way a uniqueness claim fails review. -->
+
+## Order of decisions
+
+<!-- Playbook step 2. What must be known first? What does it unlock? Where does
+     validation belong? This becomes the intended solution path, and the budget
+     is sized against it. -->
+
+## Candidate jobs
+
+<!-- Playbook step 3. Every plausible wrong answer a competent colleague could
+     produce, with one sentence on why it loses. At least one must be
+     structurally correct and numerically wrong.
+
+     Cross-check: each row here should have a row in
+     grader/grading_guide.md. -->
+
+## Wrong paths catalogue
+
+<!-- Playbook step 4. The shortcuts, and which wrong answer each produces. The
+     modal one is your trap and goes in solution/shortcut.py. -->
+
+## Budget
+
+<!-- What the intended path costs, what the shortcut costs, what brute force
+     would cost, and why the number you chose sits between them. -->
+
+## Calibration
+
+<!-- Fill in as you go. See docs/CALIBRATION.md for the gate.
+
+| Check | Requirement | Result |
+|---|---|---|
+| intended solver | passes within budget | |
+| shortcut solver | fails | |
+| answer stable across oracle noise seeds | yes | |
+| tolerance < distance to nearest near-miss | yes | |
+| Taiga pass rate | in band, N=32 | |
+| failure concentration on the named near-miss | >= 60% | |
+| artefact failure rate | <= 10% | |
+
+Record the job id for every Taiga run so the numbers can be traced back. -->

@@ -1,0 +1,31 @@
+# BRIEF — <task name>
+
+**Domain:**
+**Sub-domain:**
+**Tool:**
+**Direction:** Forward
+
+## The idea
+
+<!-- One paragraph, in your own words. What system is being simulated, and what
+     single number comes out? -->
+
+## Why forward and not inverse
+
+<!-- Answer this honestly — inverse is the default direction because it gives a
+     cleaner reasoning signal. Choose forward only when:
+       * the task genuinely requires RUNNING a specific tool, and the difficulty
+         lives in the mesh / solver / convergence / boundary-condition choice;
+       * hiding parameters would feel artificial;
+       * a single well-defined number comes out.
+     If you cannot make that case, write the inverse version instead. -->
+
+## The method decision being tested
+
+<!-- Name it here, for the reviewer. Which non-obvious choice silently
+     determines correctness? This is the whole task, and it must never appear
+     in problem.md. -->
+
+## What the model must report
+
+<!-- The exact output: quantity, definition, units, precision. -->

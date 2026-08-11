@@ -7,15 +7,23 @@ that to the model.
 
 This document is the engineering contract. For the *scientific* requirements
 (uniqueness argument, near-miss enumeration, pass-rate calibration) see
-`sample_experts_instructions.md`, which takes precedence on task design.
+`docs/TASK_DESIGN.md`, which takes precedence on task design, and
+`docs/CALIBRATION.md`, which is the authority on the shipping gate.
 
 ---
 
 ## 1. Create the folder
 
 ```bash
-cp -r problems/_template problems/my-problem-id
+cp -r templates/inverse-task problems/my-problem-id     # or templates/forward-task
+cd problems/my-problem-id
+for f in $(find . -name '*.template'); do mv "$f" "${f%.template}"; done
 ```
+
+`templates/` carries the full authoring set — the annotated oracle, both
+solvers, the near-miss table, `STATE.md`, and an `INSTRUCTIONS.md` walking the
+eight steps. `problems/_template/` is a bare runtime-only skeleton, useful when
+you already know the contract and just want the four files the container needs.
 
 `my-problem-id` must be lowercase kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`) — Taiga
 enforces that pattern on problem ids. Folders starting with `_` or `.` are
@@ -264,8 +272,8 @@ solver-visible text names the method; and the files the image needs are present.
 
 ## 7. Run it on Taiga
 
-Build and push, then point a problem at it. See `docs/EXPERT_WORKFLOW.md` for
-the Create Problem form field-by-field (matching the UI screenshots).
+Build and push, then point a problem at it. See `docs/TAIGA_RUNBOOK.md` for
+the Create Problem form field-by-field, and for what to do with the result.
 
 ```json
 {
@@ -291,3 +299,46 @@ data owner-only. At setup it also makes writable preloaded problem trees
 owner-only. Taiga's broad model tools run as uid/gid `1000:1000`, so a task may
 opt into one without exposing the oracle. Files remain intact so an MCP restart
 can reload the problem and grade the persisted submission.
+
+---
+
+## 8. Forward tasks
+
+Everything above describes an inverse task. A forward task is the same engine
+with the oracle removed:
+
+| | Inverse | Forward |
+|---|---|---|
+| Hidden system | `oracle/setup.py` | none |
+| Model input | probes via `query_oracle`, under budget | `simulation/**`, mounted and visible |
+| Published tools | `query_oracle`, `describe_oracle`, `submit_answer` | `submit_answer` (+ `bash`, from the Taiga form) |
+| Solver contract | `solve(oracle)` | `solve(simulation_dir)` |
+| Budget | enforced by the engine | none |
+| Grading | identical — exact match against `golden/expected.json` | identical |
+
+The engine decides direction from **structure**, not metadata: a folder with
+`oracle/setup.py` and no `simulation/` is inverse; a folder with a non-empty
+`simulation/` and no oracle is forward. `config.yaml`'s `direction:` is
+documentation, and the validator fails the problem if the two disagree — that
+mismatch is nearly always a typo worth catching.
+
+`query_oracle` on a forward problem returns an explicit error telling the model
+there is nothing to probe, rather than failing obscurely.
+
+### What ships
+
+`docker/collect_problems.py` allowlists `simulation/` alongside `oracle/`, so a
+forward problem's inputs enter the image while `solution/`, the near-miss table,
+and the authoring notes stay out — same as for inverse.
+
+### The image
+
+The published image is stdlib-only. A forward task exists to make the model run
+a real tool, so it almost always needs an image with that toolchain baked in.
+Build from this repo's Dockerfile so the MCP server and grading path come along.
+See `docs/TAIGA_RUNBOOK.md` §7.
+
+### Reference
+
+`problems/rod-heat-forward/` is a complete, validator-clean forward task —
+stdlib only, so it runs against the stock image.

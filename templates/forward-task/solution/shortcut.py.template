@@ -1,0 +1,49 @@
+"""solution/shortcut.py — the trap, as running code.
+
+This file MUST FAIL. For a forward task it is doing more work than its inverse
+counterpart: it is the only evidence that the method decision matters at all.
+Without it, you have not built a reasoning task — you have built a "can you run
+the tool" task, and frontier models can run the tool.
+
+CONTRACT: same as main.py.
+
+    def solve(simulation_dir) -> answer
+
+Authoring and calibration only. Never mounted, never shipped.
+
+THE TRAPS THAT ACTUALLY WORK
+-----------------------------
+Prefer a MODELLING error over a resolution error. Resolution errors converge
+away — a model that refines far enough gets the right answer by brute force,
+and your task degrades into a compute test. Modelling errors do not converge
+away at any resolution:
+
+  * steady state where the problem is genuinely transient
+  * reporting a mean where the question asks for a peak (or the reverse)
+  * the wrong boundary-condition TYPE, not the wrong value
+  * a linearised or small-amplitude model outside its regime
+  * the wrong averaging window, frame, or sign convention
+  * defaults that silently disable a physical effect the regime needs
+
+If your trap is "they used the default mesh", check what happens when the model
+simply refines it. If refinement rescues the answer, the trap is a speed bump.
+
+Do not sandbag it. This is the competent wrong answer — implement the best
+version of it. Keep the file self-contained; do not import main.py.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def solve(simulation_dir):
+    simulation_dir = Path(simulation_dir)
+
+    # The defensible-looking shortcut: the standard treatment, run once, with
+    # no check that its assumptions hold here. TODO.
+    answer = 0.0
+    return answer
+
+
+if __name__ == "__main__":
+    print(solve(Path(__file__).resolve().parent.parent / "simulation"))

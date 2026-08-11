@@ -7,8 +7,8 @@ integer. Internally it computes
 output = (a * x + b) mod 97
 ```
 
-where `a` and `b` are fixed whole numbers you cannot see, and `97` is a known
-modulus.
+where `97` is a known modulus and `a` and `b` are fixed integers you cannot see,
+each in the range `0 <= a, b < 97`.
 
 # What you can use
 

@@ -1,0 +1,12 @@
+# Every Python package oracle/setup.py imports, one per line, version-pinned.
+#
+# The published image installs only `mcp` and `pydantic`. Anything else your
+# oracle needs must be listed here AND baked into the image you point Taiga at
+# — see docs/TAIGA_RUNBOOK.md section 7. A task whose oracle imports scipy will
+# fail at setup_problem time against the stock image.
+#
+# Pin exact versions. A reward that moves with a patch release is not a reward.
+#
+# Example:
+# numpy==2.1.3
+# scipy==1.14.1

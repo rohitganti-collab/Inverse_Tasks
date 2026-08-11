@@ -1,0 +1,22 @@
+{
+  "domain_length_m": 1.0,
+  "thermal_diffusivity_m2_per_s": 0.05,
+  "boundary_condition": {
+    "type": "dirichlet",
+    "temperature_at_x0_K": 0.0,
+    "temperature_at_xL_K": 0.0
+  },
+  "initial_condition": {
+    "type": "uniform",
+    "temperature_K": 0.0
+  },
+  "source": {
+    "peak_amplitude_K_per_s": 4.0,
+    "centre_m": 0.35,
+    "gaussian_half_width_m": 0.12,
+    "drive_period_s": 4.0,
+    "form": "S(x, t) = peak_amplitude * exp(-((x - centre)/gaussian_half_width)**2) * (1 + sin(2*pi*t/drive_period))"
+  },
+  "probe_position_m": 0.6,
+  "notes": "Units are SI. The source has been running since t = 0 with the rod initially at 0 K."
+}

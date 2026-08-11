@@ -1,0 +1,10 @@
+{
+  "answer": [0.0, 0.0],
+  "tolerance": 0,
+  "keys": ["param_a", "param_b"],
+  "scoring": "binary",
+  "_comment_answer": "TODO: the graded answer. Number, string, array, or object. Must match ANSWER_SCHEMA in the oracle if you declared one. Delete these _comment_ keys.",
+  "_comment_tolerance": "Absolute tolerance per numeric element. Rule: strictly SMALLER than the distance from the answer to your nearest labelled near-miss, and strictly LARGER than the spread of your own intended solver across noise seeds. If no value satisfies both, the near-miss is too close to grade and the task is rejected.",
+  "_comment_keys": "Optional names for array elements. Lets the model submit {\"param_a\": ..., \"param_b\": ...} as well as a bare array, and labels the per-element grading detail.",
+  "_comment_scoring": "binary = 1.0 only if everything matches. partial = fraction of matching elements — which rewards exactly the incomplete near-miss most tasks exist to reject. Keep binary unless you mean it."
+}

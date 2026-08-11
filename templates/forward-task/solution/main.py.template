@@ -1,0 +1,57 @@
+"""solution/main.py — the intended solver for a forward task.
+
+Proves the task is solvable from the inputs alone, and establishes the golden
+answer.
+
+CONTRACT
+--------
+    def solve(simulation_dir) -> answer
+
+`simulation_dir` is a Path to the folder holding the input files. Return the
+answer in the same shape as golden/expected.json.
+
+Authoring and calibration only. Never mounted under Preloaded Files.
+
+WHAT THIS FILE HAS TO DO THAT AN INVERSE SOLVER DOESN'T
+--------------------------------------------------------
+Establish that the answer is discretisation-independent, then write the evidence
+into STATE.md. A forward answer is only well defined if it stops moving:
+
+  * refine the grid until the reported quantity is stable, and record the table
+  * refine the time step likewise, if the problem is transient
+  * where a converged value is approached rather than reached, say which
+    direction it is approached from and by how much
+  * interpolate to the requested probe location rather than snapping to the
+    nearest node, or the answer rides the grid
+
+The spread you measure across those refinements is the LOWER bound on your
+tolerance. The distance to the shortcut answer is the UPPER bound. If those two
+cross, the task cannot be graded and needs redesigning.
+
+Run the tool named in config.yaml. If the tool is external, invoke it with
+subprocess against the files in simulation/ — do not reimplement it.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def solve(simulation_dir):
+    simulation_dir = Path(simulation_dir)
+
+    # 1. Read the inputs. TODO.
+    # spec = json.loads((simulation_dir / "case.json").read_text())
+
+    # 2. Run the tool. TODO — subprocess for an external solver:
+    # subprocess.run(["pimpleFoam"], cwd=simulation_dir / "case", check=True)
+
+    # 3. Post-process into the quantity the prompt asks for, at the resolution
+    #    your convergence study justified. TODO.
+    answer = 0.0
+
+    # 4. Round/format exactly as problem.md specifies. TODO.
+    return answer
+
+
+if __name__ == "__main__":
+    print(solve(Path(__file__).resolve().parent.parent / "simulation"))

@@ -1,0 +1,54 @@
+<!--
+problem.md — the only thing the model sees.
+
+WRITE THIS LAST. YOU own it. Claude may not draft it, reformat it, or proofread
+it.
+
+A forward task hands over the whole system. Everything is specified; nothing is
+hidden. So the ONLY place difficulty can live is the method decision you decline
+to make for the model — which discretisation, which solver, whether the problem
+is steady or transient, which boundary condition, whether to check convergence
+at all. Name any of those and there is no task left.
+
+CHECKLIST before you validate:
+  [ ] The physics, geometry, material properties and boundary conditions are
+      complete — the model should never have to guess an input
+  [ ] The input files are named, and they exist under simulation/
+  [ ] No hint about mesh, grid, time step, solver family, or convergence
+  [ ] No "note that the default settings may not be sufficient"
+  [ ] No method names
+  [ ] Answer format explicit: units, decimal places, ordering
+  [ ] Any convention that matters is stated (sign, reference frame, denominator,
+      time-averaged vs peak vs final)
+  [ ] The quantity asked for is unambiguous — read it back and ask whether a
+      careful reader could reasonably report something else and be right
+
+That last one is the forward-task killer. "Report the drag" is ambiguous
+(instantaneous? mean? which cycle?). "Report the time-averaged drag coefficient
+over the final two shedding periods" is not.
+
+Delete this comment block before shipping.
+-->
+
+# Task setup
+
+<!-- One paragraph. The physical system, the regime, the material properties.
+     Reference the input files by name: "the case is set up in
+     `simulation/cylinder/`". -->
+
+# What you can use
+
+<!-- State that the inputs are in simulation/ and that a shell is available.
+     Do not tell the model which solver, scheme, or resolution to use — that
+     decision is the task. -->
+
+# Your task
+
+<!-- Exactly what to compute. Be pedantic about the definition of the quantity:
+     over what interval, at what location, in what frame. -->
+
+# Output format
+
+<!-- The exact shape: units, decimal places, ordering, separator. -->
+
+Submit your answer via `submit_answer(answer)`.

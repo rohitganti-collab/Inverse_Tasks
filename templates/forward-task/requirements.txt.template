@@ -1,0 +1,11 @@
+# Every package needed to RUN this task — both by your reference solver and by
+# the model inside the container.
+#
+# A forward task is only as reproducible as its toolchain. Pin exact versions,
+# and remember that the published inverse-tasks image contains no scientific
+# software at all: a forward task needs an image with your tool baked in.
+# See docs/TAIGA_RUNBOOK.md section 7.
+#
+# Example:
+# numpy==2.1.3
+# scipy==1.14.1

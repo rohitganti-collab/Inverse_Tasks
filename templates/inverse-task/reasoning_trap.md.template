@@ -1,0 +1,20 @@
+# Reasoning trap
+
+<!-- You own this file. Claude may not write it or reformat it.
+     This is shared with the client. -->
+
+## The trap
+
+<!-- One paragraph. What does a competent practitioner in your field reach for
+     first, and why does it silently produce a wrong answer here? Name the
+     conditions under which that approach IS correct — a trap that is simply a
+     mistake is not interesting; a trap that is the right method in an adjacent
+     regime is.
+
+     Say what makes it invisible: no residual to inspect, a goodness-of-fit that
+     stays clean, a tool that reports high confidence in the wrong result. -->
+
+## Why a careful solver succeeds
+
+<!-- One paragraph. What is the specific check or measurement that separates the
+     two paths, and why would someone think to make it? -->

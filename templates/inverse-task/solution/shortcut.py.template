@@ -1,0 +1,39 @@
+"""solution/shortcut.py — the trap, as running code.
+
+This file MUST FAIL against the oracle. If it passes, the task does not
+discriminate between the right method and the wrong one, and it is broken —
+not "a bit easy", broken. Reward spent on a task a shortcut can beat trains a
+model to take the shortcut.
+
+CONTRACT: same as main.py.
+
+    def solve(oracle) -> answer
+
+Authoring and calibration only. Never mounted, never shipped.
+
+WRITING IT
+----------
+Implement the trap you wrote in reasoning_trap.md, mechanically and faithfully.
+Do not sandbag it. This is meant to be the *competent* wrong answer — the thing
+a good practitioner does on a normal Tuesday — so give it the best version of
+itself:
+
+  * it should cost LESS budget than the intended path, so it stays tempting
+  * it should produce a structurally well-formed answer, not a crash
+  * it should be the method that is genuinely correct in an adjacent regime
+
+If the honest version of the trap passes, that is a finding: your task does not
+test what you thought. Harden it (docs/TASK_DESIGN.md, "Five ways to harden a
+task") rather than weakening the shortcut.
+
+Keep this file self-contained — do not import solution/main.py. A
+missing-import error would be mistaken for the trap failing honestly.
+"""
+from __future__ import annotations
+
+
+def solve(oracle):
+    # The tempting path: one convenient measurement, the standard treatment,
+    # no check. TODO: replace with your task's modal professional error.
+    reading = oracle.measure(setting=0.0)
+    return [reading["reading"], 0.0]

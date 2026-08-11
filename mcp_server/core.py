@@ -138,12 +138,16 @@ def discover_problems(roots: Optional[Iterable[os.PathLike | str]] = None) -> di
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith(_RESERVED_PREFIXES):
                 continue
-            # Either marker identifies a problem folder. `oracle/setup.py` alone
-            # is enough because an expert using the Create Problem form may keep
-            # the prompt in the form's Task Prompt field instead of problem.md.
-            if not (child / "problem.md").is_file() and not (
-                child / "oracle" / "setup.py"
-            ).is_file():
+            # Any of these markers identifies a problem folder. `oracle/setup.py`
+            # alone is enough because an expert using the Create Problem form may
+            # keep the prompt in the form's Task Prompt field instead of
+            # problem.md; `simulation/` is the equivalent marker for a forward
+            # task, which has no oracle at all.
+            if (
+                not (child / "problem.md").is_file()
+                and not (child / "oracle" / "setup.py").is_file()
+                and not (child / "simulation").is_dir()
+            ):
                 continue
             found.setdefault(child.name, child)
     return found
@@ -518,13 +522,98 @@ def _actions_from_introspection(oracle: Any) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
+def read_direction(problem_dir: Path) -> Optional[str]:
+    """`direction:` from config.yaml, lowercased. None if absent/unreadable.
+
+    Parsed by hand rather than with PyYAML so the engine keeps its stdlib-only
+    guarantee (see the module docstring).
+    """
+    config = problem_dir / "config.yaml"
+    if not config.is_file():
+        return None
+    try:
+        text = config.read_text()
+    except OSError:  # pragma: no cover - defensive
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(("direction:", "directionality:")):
+            continue
+        value = stripped.split(":", 1)[1]
+        value = value.split("#", 1)[0].strip().strip("'\"").lower()
+        if value:
+            return value
+    return None
+
+
+def detect_direction(problem_dir: Path) -> str:
+    """Decide whether a problem folder is inverse or forward.
+
+    Structure wins over metadata, because the structure is what the engine can
+    actually serve: a folder with an oracle can be probed, one with only
+    `simulation/` cannot. `config.yaml` breaks the tie when a folder somehow has
+    both or neither, and the validator flags that disagreement separately.
+    """
+    has_oracle = (problem_dir / "oracle" / "setup.py").is_file()
+    has_simulation = (problem_dir / "simulation").is_dir()
+    if has_oracle and not has_simulation:
+        return "inverse"
+    if has_simulation and not has_oracle:
+        return "forward"
+    declared = read_direction(problem_dir)
+    if declared in ("inverse", "forward"):
+        return declared
+    return "inverse" if has_oracle else "forward"
+
+
 class Problem:
-    """A loaded problem: its prompt, its oracle, and its declared surface."""
+    """A loaded problem: its prompt, its oracle, and its declared surface.
+
+    Two directions are served:
+
+    * **inverse** — `oracle/setup.py` defines the hidden system; the model
+      probes it through `query_oracle` under a budget, then submits.
+    * **forward** — no oracle. The model is handed the inputs under
+      `simulation/` and must run the domain tool itself, then submit. There is
+      nothing to probe, so no probe surface is published; grading is the same
+      exact-match path against `golden/expected.json`.
+    """
 
     def __init__(self, problem_id: str, directory: Path):
         self.problem_id = problem_id
         self.directory = directory
-        self.oracle_cls = _load_oracle_class(directory)
+        self.direction = detect_direction(directory)
+
+        if self.direction == "forward":
+            self._init_forward()
+        else:
+            self._init_inverse()
+
+        # Read the runtime inputs before setup makes this tree owner-only.
+        self._prompt_text = self._read_prompt()
+        self._golden = self._read_or_cache_golden()
+        self._custom_grader = self._read_or_cache_grader()
+
+    def _init_forward(self) -> None:
+        self.oracle_cls = None
+        self.oracle = None
+        self.actions = []
+        self.actions_declared = False
+        self.budget_total = None
+        simulation = self.directory / "simulation"
+        self.simulation_files = (
+            sorted(
+                str(p.relative_to(simulation))
+                for p in simulation.rglob("*")
+                if p.is_file() and "__pycache__" not in p.parts
+            )
+            if simulation.is_dir()
+            else []
+        )
+
+    def _init_inverse(self) -> None:
+        self.simulation_files = []
+        self.oracle_cls = _load_oracle_class(self.directory)
         with protected_stdout():
             self.oracle = self.oracle_cls()
 
@@ -541,17 +630,12 @@ class Problem:
 
         if not self.actions and not hasattr(self.oracle, "query"):
             raise OracleContractError(
-                f"Oracle for {problem_id!r} exposes no probe surface: declare `ACTIONS`, "
+                f"Oracle for {self.problem_id!r} exposes no probe surface: declare `ACTIONS`, "
                 "expose public methods, or provide a `query(mode, **params)` method."
             )
 
         budget = _first_attr(self.oracle, ("BUDGET", "budget", "QUERY_BUDGET"))
         self.budget_total: Optional[int] = int(budget) if isinstance(budget, numbers.Integral) else None
-
-        # Read the runtime inputs before setup makes this tree owner-only.
-        self._prompt_text = self._read_prompt()
-        self._golden = self._read_or_cache_golden()
-        self._custom_grader = self._read_or_cache_grader()
 
     def _read_prompt(self) -> str:
         path = self.directory / "problem.md"
@@ -687,8 +771,9 @@ class Session:
             }
             for a in self.problem.actions
         ]
-        return {
+        described = {
             "problem_id": self.problem.problem_id,
+            "direction": self.problem.direction,
             "title": self.problem.title,
             "actions": actions,
             "actions_declared": self.problem.actions_declared,
@@ -697,6 +782,13 @@ class Session:
             "budget_remaining": self.remaining,
             "answer_shape": self.problem.answer_shape(),
         }
+        if self.problem.direction == "forward":
+            described["note"] = (
+                "This is a forward task: there is no oracle to probe. Work from "
+                "the provided input files and submit your result."
+            )
+            described["input_files"] = list(self.problem.simulation_files)
+        return described
 
     # -- probing ---------------------------------------------------------- #
 
@@ -724,6 +816,12 @@ class Session:
         )
 
     def query(self, action_name: str, params: Optional[dict[str, Any]] = None) -> Any:
+        if self.problem.direction == "forward":
+            raise UnknownAction(
+                "This is a forward task: there is no oracle to query. The inputs "
+                "you need are in the provided files — run the tool yourself and "
+                "report the result with submit_answer."
+            )
         params = dict(params or {})
         action = self.problem.action(action_name)
 
@@ -1223,6 +1321,26 @@ def render_tool_guide(session: "Session", mode: str = "query") -> str:
     """
     problem = session.problem
     lines = ["---", "", "## Using your tools", ""]
+
+    if problem.direction == "forward":
+        shape = problem.answer_shape()
+        lines.append(
+            "This task has no oracle to probe. Everything you need is in the "
+            "input files described above — run the tool yourself, then report "
+            "your result."
+        )
+        if problem.simulation_files:
+            listed = ", ".join(f"`{name}`" for name in problem.simulation_files[:12])
+            if len(problem.simulation_files) > 12:
+                listed += f", … ({len(problem.simulation_files)} files total)"
+            lines += ["", f"Input files: {listed}"]
+        lines += [
+            "",
+            f"- **`submit_answer(answer)`** — pass a JSON value with this shape: "
+            f"`submit_answer(answer={answer_example(shape)})`. You may resubmit; "
+            "only your last submission is graded.",
+        ]
+        return "\n".join(lines)
 
     if problem.actions:
         if mode == "named":

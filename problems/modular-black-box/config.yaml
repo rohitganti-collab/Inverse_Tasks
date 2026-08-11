@@ -1,0 +1,5 @@
+direction: inverse
+domain: Reference
+sub_domain: modular_arithmetic
+simulator: python-stdlib
+title: The modular black box

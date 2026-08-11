@@ -1,0 +1,22 @@
+# Input files
+
+Everything in this directory is **mounted into the container and visible to the
+model**. This is the defining difference from an inverse task: nothing here is
+hidden.
+
+Put the concrete inputs the model must run:
+
+- solver case directories (OpenFOAM case folders, FEniCS meshes)
+- netlists, structure files, input decks
+- measured or generated data the run consumes
+- a machine-readable parameter file, if the physics needs one
+
+Keep it to inputs. Do **not** put here:
+
+- a reference solution, or a script that produces one
+- your run configuration if the choice of configuration is the task
+- anything that names the method you expect (a comment saying
+  `# use the transient solver` gives the whole task away)
+
+Reference the files by name in `problem.md`. Delete this file once you have
+added real inputs — the validator counts files, and a leftover README counts.

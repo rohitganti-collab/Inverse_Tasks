@@ -1,0 +1,26 @@
+# Grading guide — <task name>
+
+<!-- You own this file. Claude may not write it or reformat it. -->
+
+**Golden answer:**
+
+## Acceptance criteria
+
+<!-- Tolerance and why it is the number it is: wider than your reference
+     solver's spread across grids and time steps, tighter than the distance to
+     the nearest near-miss. Units. Rounding. -->
+
+## Near-miss table
+
+| Submitted | Looks right because | Why it loses |
+|---|---|---|
+| `<the answer>` | | — this is the answer |
+| `<naive-method result>` | | **This is the trap** (`solution/shortcut.py`) |
+| `<under-resolved result>` | | |
+| `<wrong-convention result>` | | |
+
+## Edge cases
+
+<!-- Units the model might reasonably use instead. Whether an answer reached by
+     a legitimately different numerical route is accepted (it should be — the
+     task tests the modelling decision, not the scheme). What to reject. -->
