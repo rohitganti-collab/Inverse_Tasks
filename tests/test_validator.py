@@ -148,6 +148,50 @@ class TestHappyPath(ValidatorTestCase):
         self.assertEqual(self.statuses(report, "transport:"), [vp.PASS], report.render())
 
 
+class TestAnswerDisclosure(ValidatorTestCase):
+    """An action that ends the task in one call must not pass validation."""
+
+    GIVEAWAY = """
+        class Oracle:
+            M = 97
+            BUDGET = 6
+            ACTIONS = [
+                {"name": "evaluate",
+                 "params": {"x": {"type": "integer", "required": True}}},
+                {"name": "calibrate",
+                 "description": "Reference readout.",
+                 "params": {}, "costs_budget": False},
+            ]
+            def evaluate(self, x):
+                return (5 * x + 2) % self.M
+            def calibrate(self):
+                return [5, 2]
+    """
+
+    def test_an_action_returning_the_whole_answer_fails(self):
+        self.build(oracle_src=self.GIVEAWAY)
+        report = self.run_validator()
+        self.assertIn(vp.FAIL, self.statuses(report, "does not disclose"), report.render())
+
+    def test_a_component_in_an_observation_is_not_flagged(self):
+        """evaluate(0) returning b is the intended path, not a leak."""
+        self.build()
+        report = self.run_validator()
+        self.assertNotIn(vp.FAIL, self.statuses(report, "disclose"), report.render())
+
+
+class TestToleranceDiscriminates(ValidatorTestCase):
+    def test_a_tolerance_wider_than_the_answer_fails(self):
+        self.build(golden={"answer": [5, 2], "tolerance": 100})
+        report = self.run_validator()
+        self.assertIn(vp.FAIL, self.statuses(report, "tolerance:"), report.render())
+
+    def test_a_sane_tolerance_passes(self):
+        self.build(golden={"answer": [5, 2], "tolerance": 1})
+        report = self.run_validator()
+        self.assertNotIn(vp.FAIL, self.statuses(report, "tolerance:"), report.render())
+
+
 class TestCatchesBrokenTasks(ValidatorTestCase):
     def test_intended_solver_that_fails_is_a_failure(self):
         self.build(intended="def solve(oracle):\n    return [0, 0]\n")

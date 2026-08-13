@@ -25,9 +25,11 @@ import ast
 import contextlib
 import copy
 import hashlib
+import hmac
 import importlib.util
 import inspect
 import json
+import math
 import numbers
 import os
 import re
@@ -798,6 +800,12 @@ class Session:
         # calls it once; anything higher means something re-entered the scaffold
         # hook, which is recorded in the grade so calibration can see it.
         self.setup_calls = 0
+        # Set once grading has run. Grading is terminal, so a submission after
+        # it is not a correction — it is a second guess informed by the first
+        # grade, which is the loop that turns a reachable grader into an answer
+        # oracle. Recorded either way so calibration can see the attempt.
+        self.graded = False
+        self.post_grade_submissions = 0
 
     # -- introspection ---------------------------------------------------- #
 
@@ -933,6 +941,18 @@ class Session:
     # -- submission ------------------------------------------------------- #
 
     def submit(self, answer: Any) -> dict[str, Any]:
+        if self.graded:
+            # Refuse, don't silently accept: a solver that can reach both
+            # grade_problem and submit_answer would otherwise iterate against
+            # the grade until it lands, which is a search over the answer space
+            # rather than an inverse measurement.
+            self.post_grade_submissions += 1
+            if is_taiga_runtime():
+                raise AnswerFormatError(
+                    "This attempt has already been graded; grading is terminal. "
+                    "Resubmission is only available before grading."
+                )
+
         raw = answer if isinstance(answer, str) else json.dumps(_jsonable(answer))
         parsed = parse_answer(answer) if isinstance(answer, str) else _jsonable(answer)
 
@@ -949,6 +969,7 @@ class Session:
     def grade(
         self, transcript: str = "", extra_fields: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
+        self.graded = True
         golden = self.problem.golden()
         custom = self.problem.custom_grader
         if custom is not None:
@@ -974,6 +995,7 @@ class Session:
                         "budget_used": self.calls_used,
                         "expected_fingerprint": answer_fingerprint(golden["answer"]),
                         "setup_calls": self.setup_calls,
+                        "post_grade_submissions": self.post_grade_submissions,
                         "call_log": self.call_log,
                     }
                 ),
@@ -1178,39 +1200,77 @@ def grade_discloses_expected() -> bool:
     }
 
 
-def answer_fingerprint(answer: Any) -> str:
-    """Stable, non-invertible digest of a golden answer.
+def _fingerprint_key() -> Optional[bytes]:
+    """The secret that makes a fingerprint non-invertible, or None if absent.
+
+    A plain hash of the answer is not a secret. The answer space of a typical
+    inverse task is small — four integers inside stated ranges — and enumerating
+    it takes milliseconds, so an unkeyed digest in a model-readable payload *is*
+    the answer. Keyed with a secret the model cannot read, the digest still
+    tells calibration whether two rollouts shared an instance while telling a
+    solver nothing. The image generates the key at build time, root-only.
+    """
+    configured = os.environ.get("INVERSE_TASKS_FINGERPRINT_KEY")
+    if configured:
+        return configured.encode("utf-8")
+    path = Path(
+        os.environ.get(
+            "INVERSE_TASKS_FINGERPRINT_KEY_FILE", "/var/lib/inverse-tasks/fingerprint.key"
+        )
+    )
+    try:
+        if path.is_file():
+            return path.read_bytes()
+    except OSError:  # pragma: no cover - unreadable key behaves as absent
+        pass
+    return None
+
+
+def answer_fingerprint(answer: Any) -> Optional[str]:
+    """Keyed digest of a golden answer, or None when it cannot be made safe.
 
     Calibration needs to know whether two rollouts were graded against the same
-    hidden instance — that is exactly how a task with hardcoded constants is
-    caught. A digest answers that without putting the value in the payload.
+    hidden instance — that is how a task with hardcoded constants is caught. A
+    digest answers that without putting the value in the payload, but only if it
+    cannot simply be inverted.
     """
-    canonical = json.dumps(_jsonable(answer), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    canonical = json.dumps(
+        _jsonable(answer), sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    key = _fingerprint_key()
+    if key is not None:
+        return hmac.new(key, canonical, hashlib.sha256).hexdigest()[:16]
+    if not is_taiga_runtime():
+        # Authoring: the answer is not a secret from its own author.
+        return hashlib.sha256(canonical).hexdigest()[:16]
+    # No key inside the image: omit rather than ship an invertible digest.
+    return None
 
 
-def _redact_details(details: Any) -> Any:
-    """Drop golden values from per-element comparison details.
-
-    `match` and the model's own `submitted` value stay: they say where the
-    answer went wrong without saying what it should have been.
-    """
-    if not isinstance(details, list):
-        return details
-    return [
-        {k: v for k, v in item.items() if k != "expected"} if isinstance(item, dict) else item
-        for item in details
-    ]
+# Keys that describe *which parts* of an answer were right. Individually
+# harmless-looking, collectively an answer oracle: with a reachable grader, a
+# solver reads `details[i].match` (or watches `matches` climb) and solves the
+# elements one at a time, never touching the oracle. Removed wholesale rather
+# than redacted, because the leak is the per-element resolution itself, not the
+# golden value that used to sit beside it.
+_PER_ELEMENT_KEYS = ("details", "matches", "total")
 
 
 def _scrub_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Remove golden values a custom grader may have added to its metadata."""
+    """Strip everything a model-readable grade payload must not carry.
+
+    Removes the golden answer, anything a custom grader added under `expected`,
+    and the per-element correctness channel. What survives is the model's own
+    submission, the budget it spent, and the aggregate verdict — enough to
+    diagnose a rollout, not enough to search with.
+    """
     if grade_discloses_expected():
         return metadata
-    scrubbed = {k: v for k, v in metadata.items() if k != "expected"}
-    if "details" in scrubbed:
-        scrubbed["details"] = _redact_details(scrubbed["details"])
-    return scrubbed
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key != "expected" and key not in _PER_ELEMENT_KEYS
+    }
 
 
 def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") -> dict[str, Any]:
@@ -1221,11 +1281,15 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
         "budget_used": session.calls_used,
         "submitted_raw": session.submission_raw,
         "submitted": session.submission,
-        # Never the answer itself — see grade_discloses_expected().
-        "expected_fingerprint": answer_fingerprint(golden["answer"]),
         "setup_calls": session.setup_calls,
+        "post_grade_submissions": session.post_grade_submissions,
         "call_log": session.call_log,
     }
+    # Never the answer itself — see grade_discloses_expected(). Omitted entirely
+    # when it could not be keyed, rather than shipped invertible.
+    fingerprint = answer_fingerprint(golden["answer"])
+    if fingerprint is not None:
+        base_metadata["expected_fingerprint"] = fingerprint
     if grade_discloses_expected():
         base_metadata["expected"] = golden["answer"]
 
@@ -1263,16 +1327,20 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
         # instead, and record that we did, so a custom grader returning e.g. two
         # subscores at weight 1.0 each degrades to a weighted average.
         if not grade.get("allow_unbounded"):
-            weighted = sum(
-                grade["subscores"][k] * w for k, w in grade["weights"].items()
-                if k in grade["subscores"]
-            )
-            if weighted > 1.0 + 1e-9:
-                total = sum(grade["weights"].values()) or 1.0
+            # Normalise on the WEIGHTS, not on the score this particular
+            # submission happened to achieve. Keying off the achieved value left
+            # a hole: weights of {1.0, 1.0} only got rescaled once a solver did
+            # well enough to exceed 1.0, so a custom grader reporting
+            # correctness 0.0 alongside any other full-marks subscore reached a
+            # weighted Taiga score of 1.0 — a pass for a wrong answer. Weights
+            # are a property of the grader, so the check has to be too.
+            total = sum(grade["weights"].values())
+            if total > 1.0 + 1e-9:
                 grade["weights"] = {k: w / total for k, w in grade["weights"].items()}
                 grade["metadata"]["weights_normalised"] = (
-                    f"weighted sum was {weighted:.4f} (>1.0); weights rescaled by "
-                    f"1/{total:.4f} so the grade stays within [0, 1]"
+                    f"weights summed to {total:.4f} (>1.0) and were rescaled by "
+                    f"1/{total:.4f}, so the grade is a weighted average within "
+                    "[0, 1] rather than a sum that can exceed it"
                 )
         return grade
 
@@ -1351,7 +1419,16 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, numbers.Integral):
         return int(value)
     if isinstance(value, numbers.Real):
-        return float(value)
+        number = float(value)
+        if not math.isfinite(number):
+            # NaN and Infinity are not JSON. Python's own encoder emits them as
+            # bare tokens and its decoder accepts them, but a strict parser
+            # rejects the payload — which turns a submission that should score
+            # 0.0 into an environment failure, quietly removing a real failure
+            # from the calibration sample. Render as a string: still visible in
+            # the transcript, never equal to a numeric golden value.
+            return repr(number)
+        return number
     if isinstance(value, (list, tuple, set)):
         return [_jsonable(v) for v in value]
     if isinstance(value, dict):

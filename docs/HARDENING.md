@@ -54,6 +54,35 @@ submit_answer([1784,1330,840,935])
 Authoring runs keep the disclosure — the author already owns
 `golden/expected.json`, and the validator needs to compare against it.
 
+### The grade is not an answer oracle
+
+Removing `expected` was necessary and not sufficient. An adversarial audit of
+the first version of these fixes scored 1.0 on the reference task **with zero
+oracle probes**, three different ways, using only what was left in the payload:
+
+- **Per-element correctness.** `details[i].match` — and the `matches`/`total`
+  counters — say *which* coordinates are right, so a solver submits
+  `[c, 0]` for each candidate `c`, watches the flag, and solves the elements one
+  at a time. Cost is the sum of the coordinate ranges, not their product. All
+  three keys are now dropped from a model-readable payload; the aggregate
+  verdict and the solver's own submission remain.
+- **An unkeyed fingerprint.** `sha256(answer)` is not a secret when the answer
+  space is four integers inside stated ranges — the audit inverted it for both
+  shipped problems in under 50 ms. It is now HMAC-keyed with a secret generated
+  at build time into `/var/lib/inverse-tasks/fingerprint.key` (root, `0600`),
+  and omitted entirely if no key is available rather than shipped invertible.
+- **Iterating against the grade.** Grading is now terminal: a submission after
+  it is refused, and the attempt records `post_grade_submissions` so
+  calibration can see it was tried.
+
+A related defect in the same pass: `_normalise_grade` decided whether to rescale
+weights by looking at the score a submission *achieved* rather than at the sum
+of the weights. Weights of `{1.0, 1.0}` therefore went unrescaled until a solver
+did well enough to exceed 1.0 — so a custom grader reporting `correct: 0.0`
+beside any other full-marks subscore produced a weighted Taiga score of **1.0**,
+a pass for a wrong answer. Normalisation now keys off the weights, which are a
+property of the grader rather than of the attempt.
+
 ### Observations survive the transport
 
 Probe results are rendered by `server._dump()` and returned as `str`. The tool

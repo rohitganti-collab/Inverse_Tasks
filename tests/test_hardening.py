@@ -234,41 +234,118 @@ class GradeMetadataLeakage(HardeningCase):
 # --------------------------------------------------------------------------- #
 
 
+KEYED_ENV = dict(TAIGA_ENV, INVERSE_TASKS_FINGERPRINT_KEY="test-key-not-the-real-one")
+
+PING_ORACLE = """
+    class Oracle:
+        BUDGET = 4
+        ACTIONS = [{"name": "ping", "params": {}}]
+        def ping(self):
+            return 1
+    """
+
+
 class AnswerFingerprint(HardeningCase):
-    def test_fingerprint_is_stable_and_non_invertible(self) -> None:
+    def test_fingerprint_is_stable_and_hides_the_values(self) -> None:
         answer = [1784, 1330, 840, 935]
-        digest = core.answer_fingerprint(answer)
-        self.assertEqual(digest, core.answer_fingerprint(list(answer)))
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            digest = core.answer_fingerprint(answer)
+            self.assertEqual(digest, core.answer_fingerprint(list(answer)))
         for value in answer:
             self.assertNotIn(str(value), digest)
 
     def test_different_instances_fingerprint_differently(self) -> None:
         """Two rollouts sharing a fingerprint means the instance never varied."""
-        self.assertNotEqual(
-            core.answer_fingerprint([1784, 1330, 840, 935]),
-            core.answer_fingerprint([1785, 1330, 840, 935]),
-        )
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            self.assertNotEqual(
+                core.answer_fingerprint([1784, 1330, 840, 935]),
+                core.answer_fingerprint([1785, 1330, 840, 935]),
+            )
+
+    def test_the_digest_is_keyed_not_a_plain_hash(self) -> None:
+        """An unkeyed hash of a four-integer answer is brute-forceable in ms."""
+        import hashlib
+
+        answer = [1784, 1330, 840, 935]
+        plain = hashlib.sha256(
+            json.dumps(answer, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            self.assertNotEqual(core.answer_fingerprint(answer), plain)
+
+    def test_no_key_under_taiga_means_no_fingerprint(self) -> None:
+        """Omit it rather than ship something invertible."""
+        env = dict(TAIGA_ENV, INVERSE_TASKS_FINGERPRINT_KEY_FILE=str(self.root / "absent"))
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop("INVERSE_TASKS_FINGERPRINT_KEY", None)
+            self.assertIsNone(core.answer_fingerprint([7, 7]))
 
     def test_fingerprint_is_reported_in_the_grade(self) -> None:
-        write_problem(
-            self.root,
-            "fp",
-            """
-            class Oracle:
-                BUDGET = 2
-                ACTIONS = [{"name": "ping", "params": {}}]
-                def ping(self):
-                    return 1
-            """,
-            {"answer": [7, 7], "tolerance": 0},
-        )
+        write_problem(self.root, "fp", PING_ORACLE, {"answer": [7, 7], "tolerance": 0})
         session = self.session("fp")
         session.submit([7, 7])
-        with mock.patch.dict(os.environ, TAIGA_ENV, clear=False):
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
             grade = session.grade()
-        self.assertEqual(
-            grade["metadata"]["expected_fingerprint"], core.answer_fingerprint([7, 7])
+            self.assertEqual(
+                grade["metadata"]["expected_fingerprint"],
+                core.answer_fingerprint([7, 7]),
+            )
+
+
+# --------------------------------------------------------------------------- #
+# 3b. The grade must not be usable as a per-element oracle
+# --------------------------------------------------------------------------- #
+
+
+class GradeIsNotAnOracle(HardeningCase):
+    """Found by adversarial audit of the first version of these fixes.
+
+    Redacting `expected` from `details` was not enough: `details[i].match` and
+    the `matches`/`total` counters still say *which* elements were right, so a
+    solver with a reachable grader recovers the answer one coordinate at a time
+    without ever probing the oracle.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        write_problem(
+            self.root, "coords", PING_ORACLE, {"answer": [11, 22, 33], "tolerance": 0}
         )
+
+    def test_per_element_channel_is_absent(self) -> None:
+        session = self.session("coords")
+        session.submit([11, 0, 0])  # one element right
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            metadata = session.grade()["metadata"]
+        for key in ("details", "matches", "total"):
+            self.assertNotIn(key, metadata, f"{key} leaks per-element correctness")
+
+    def test_submitting_after_grading_is_refused(self) -> None:
+        """Grading is terminal; otherwise the grade becomes a search signal."""
+        session = self.session("coords")
+        session.submit([0, 0, 0])
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            session.grade()
+            with self.assertRaises(core.AnswerFormatError):
+                session.submit([11, 22, 33])
+
+    def test_the_attempt_records_that_it_was_tried(self) -> None:
+        session = self.session("coords")
+        session.submit([0, 0, 0])
+        with mock.patch.dict(os.environ, KEYED_ENV, clear=False):
+            session.grade()
+            with self.assertRaises(core.AnswerFormatError):
+                session.submit([1, 2, 3])
+            metadata = session.grade()["metadata"]
+        self.assertEqual(metadata["post_grade_submissions"], 1)
+
+    def test_authoring_runs_may_still_resubmit(self) -> None:
+        session = self.session("coords")
+        session.submit([0, 0, 0])
+        with mock.patch.dict(os.environ, {"INVERSE_TASKS_RUNTIME": "build"}, clear=False):
+            session.grade()
+            session.submit([11, 22, 33])  # must not raise
+            self.assertEqual(session.grade()["subscores"]["correct"], 1.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -430,6 +507,70 @@ class AttemptStateTrust(HardeningCase):
             restored = server._restore_session("stateful")
         self.assertIsNotNone(restored)
         self.assertEqual(restored.calls_used, 2)
+
+    def test_setup_cannot_be_re_entered_to_reset_the_budget(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            dict(TAIGA_ENV, INVERSE_TASKS_PROBLEM_DIRS=str(self.root)),
+            clear=False,
+        ):
+            server.state.session = None
+            server.state.setup_calls = 0
+            server.setup_problem("stateful")
+            server.query_oracle("ping", {})
+            self.assertEqual(server.state.session.calls_used, 1)
+            with self.assertRaises(ValueError):
+                server.setup_problem("stateful")
+            self.assertEqual(server.state.session.calls_used, 1)
+
+    def test_pivoting_through_another_problem_cannot_reset_the_budget(self) -> None:
+        """The audit's bypass: A -> B -> A, where no hop matches the one before.
+
+        The first version of this guard compared problem ids, so each individual
+        hop looked like a new problem and the budget went back to zero.
+        """
+        write_problem(
+            self.root,
+            "other",
+            """
+            class Oracle:
+                BUDGET = 3
+                ACTIONS = [{"name": "ping", "params": {}}]
+                def ping(self):
+                    return 2
+            """,
+            {"answer": 2, "tolerance": 0},
+        )
+        with mock.patch.dict(
+            os.environ,
+            dict(TAIGA_ENV, INVERSE_TASKS_PROBLEM_DIRS=str(self.root)),
+            clear=False,
+        ):
+            server.state.session = None
+            server.state.setup_calls = 0
+            server.setup_problem("stateful")
+            for _ in range(3):
+                server.query_oracle("ping", {})
+            self.assertEqual(server.state.session.calls_used, 3)
+
+            with self.assertRaises(ValueError):
+                server.setup_problem("other")      # the pivot
+            with self.assertRaises(ValueError):
+                server.setup_problem("stateful")   # and back again
+            self.assertEqual(server.state.session.calls_used, 3)
+
+    def test_setup_calls_counter_survives_a_pivot_attempt(self) -> None:
+        """The tamper trail must not reset along with the session."""
+        with mock.patch.dict(
+            os.environ,
+            dict(TAIGA_ENV, INVERSE_TASKS_PROBLEM_DIRS=str(self.root)),
+            clear=False,
+        ):
+            server.state.session = None
+            server.state.setup_calls = 0
+            server.setup_problem("stateful")
+            self.assertEqual(server.state.session.setup_calls, 1)
+            self.assertEqual(server.state.setup_calls, 1)
 
     def test_state_directory_owned_by_someone_else_is_refused(self) -> None:
         server = self._server()

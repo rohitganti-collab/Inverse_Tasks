@@ -106,21 +106,97 @@ python - "$PROBLEM" <<'PY'
 import os, sys
 sys.path.insert(0, "/app/mcp_server")
 os.environ["INVERSE_TASKS_PROBLEM_DIRS"] = "/mnt/problems:/app/problems"
-import server
+import core, server
 
 problem_id = sys.argv[1]
+failures = 0
+
 server.state.session = None
+server.state.setup_calls = 0
 server.setup_problem(problem_id)
 for i in range(3):
     server.query_oracle("evaluate", {"x": i})
 used = server.state.session.calls_used
 try:
     server.setup_problem(problem_id)
+    print(f"  [FAIL] same-id re-entry reset the budget: {used} -> {server.state.session.calls_used}")
+    failures += 1
 except ValueError:
     print(f"  [ ok ] setup_problem refused re-entry ({used} call(s) already spent)")
-    sys.exit(0)
-print(f"  [FAIL] setup_problem reset the budget: {used} -> {server.state.session.calls_used}")
-sys.exit(1)
+
+# The audit's bypass: pivot through a second problem and come back, so no single
+# hop matches the one before it.
+others = [p for p in sorted(core.discover_problems()) if p != problem_id]
+if others:
+    blocked = True
+    for hop in (others[0], problem_id):
+        try:
+            server.setup_problem(hop)
+            blocked = False
+        except ValueError:
+            pass
+    if blocked and server.state.session.calls_used == used:
+        print(f"  [ ok ] pivoting via {others[0]!r} did not reset the budget")
+    else:
+        print(f"  [FAIL] pivot via {others[0]!r} reset the budget to "
+              f"{server.state.session.calls_used}")
+        failures += 1
+else:
+    print("  [ -- ] only one problem in the image; pivot check skipped")
+
+sys.exit(1 if failures else 0)
+PY
+[[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
+
+hdr "the grade cannot be used as an answer oracle"
+python - "$PROBLEM" <<'PY'
+import json, os, sys
+sys.path.insert(0, "/app/mcp_server")
+os.environ["INVERSE_TASKS_PROBLEM_DIRS"] = "/mnt/problems:/app/problems"
+import core, server
+
+problem_id = sys.argv[1]
+failures = 0
+
+server.state.session = None
+server.state.setup_calls = 0
+server.setup_problem(problem_id)
+server.submit_answer(json.dumps([0, 0]))
+grade = server.grade_problem(problem_id)
+meta = grade.metadata or {}
+
+# Per-element correctness would let a solver find the answer one coordinate at
+# a time, never touching the oracle.
+leaky = [k for k in ("details", "matches", "total") if k in meta]
+if leaky:
+    print(f"  [FAIL] grade exposes per-element correctness via {leaky}")
+    failures += 1
+else:
+    print("  [ ok ] grade exposes no per-element correctness channel")
+
+# Grading is terminal: no iterating against the grade.
+try:
+    server.submit_answer(json.dumps([1, 1]))
+    print("  [FAIL] a submission after grading was accepted")
+    failures += 1
+except Exception:
+    print("  [ ok ] submitting after grading is refused")
+
+# The fingerprint must not be a plain hash of the answer.
+import hashlib
+fp = meta.get("expected_fingerprint")
+if fp:
+    golden = json.load(open(f"/mnt/problems/{problem_id}/golden/expected.json"))["answer"]
+    plain = hashlib.sha256(
+        json.dumps(golden, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    if fp == plain:
+        print("  [FAIL] expected_fingerprint is an unkeyed hash — brute-forceable")
+        failures += 1
+    else:
+        print("  [ ok ] expected_fingerprint is keyed, not a plain hash")
+
+sys.exit(1 if failures else 0)
 PY
 [[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
 

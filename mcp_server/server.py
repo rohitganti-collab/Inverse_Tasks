@@ -63,6 +63,8 @@ class _State:
     def __init__(self) -> None:
         self.session: Optional[core.Session] = None
         self.bound_problem_id: Optional[str] = None
+        # Container-lifetime count, so switching problem ids cannot reset it.
+        self.setup_calls = 0
 
     def require(self) -> core.Session:
         if self.session is None:
@@ -251,23 +253,30 @@ def setup_problem(
     # budget, the whole difficulty mechanism, unlimited. Refuse once an attempt
     # is genuinely under way. Outside the image this stays permissive so the
     # selftest and validator can start successive attempts in one process.
+    # The guard is on ANY live attempt, not on a matching problem id. Comparing
+    # ids left a trivial bypass: setup(A) -> probe -> setup(B) -> setup(A) reset
+    # A's budget, because neither hop was "the same problem" as the one before
+    # it. One container serves one problem-run, so a second setup of any kind is
+    # already anomalous.
     previous = state.session
-    same_problem = previous is not None and previous.problem.problem_id == problem_id
     if (
-        same_problem
+        previous is not None
         and core.is_taiga_runtime()
-        and (previous.calls_used > 0 or previous.submitted)
+        and (previous.calls_used > 0 or previous.submitted or previous.graded)
     ):
         raise ValueError(
-            f"An attempt at {problem_id!r} is already in progress "
-            f"({previous.calls_used} budgeted call(s) used, "
+            f"An attempt at {previous.problem.problem_id!r} is already in "
+            f"progress ({previous.calls_used} budgeted call(s) used, "
             f"submitted={previous.submitted}). setup_problem starts a fresh "
             "attempt and is called once by the harness; refusing to reset a "
             "live attempt's query budget."
         )
 
     session = core.load_session(problem_id)
-    session.setup_calls = (previous.setup_calls + 1) if same_problem else 1
+    # Counted on the container, not the session, so pivoting between problems
+    # cannot reset the tamper trail either.
+    state.setup_calls += 1
+    session.setup_calls = state.setup_calls
     state.session = session
     protected = core.harden_problem_permissions(session.problem.directory)
     log(

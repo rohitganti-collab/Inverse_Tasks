@@ -368,6 +368,58 @@ def validate(problem_id: str, directory: Path, roots) -> Report:
         else:
             report.add(PASS, "privacy: grade payload carries no golden values")
 
+    # ---- the oracle must not hand over the answer -------------------------- #
+    # Nothing previously stopped an action from simply returning the golden
+    # answer, or an ACTIONS description from stating it. A "calibration" or
+    # "reference" probe that does this passes every other check: the intended
+    # solver works, the shortcut fails, the budget is enforced — and the task
+    # measures nothing, because one free call ends it.
+    # Only a *whole* answer counts. An observation containing one component is
+    # normal and usually the intended path — `evaluate(0)` returning b is the
+    # first step of the reference task's own solution. The defect is an action
+    # that ends the task in one call.
+    disclosing = []
+    for action in problem.actions:
+        probe = core.load_session(problem_id, roots)
+        try:
+            observation = probe.query(action["name"], _dummy_params(action))
+        except core.InverseTaskError:
+            continue
+        if _discloses_whole_answer(observation, golden["answer"]):
+            disclosing.append(
+                f"{action['name']} returns the complete answer in one call"
+            )
+        described = f"{action['description']} {json.dumps(action['params'])}"
+        if _discloses_whole_answer(described, golden["answer"]):
+            disclosing.append(f"{action['name']}'s description states the answer")
+    if disclosing:
+        report.add(
+            FAIL,
+            "leakage: the oracle does not disclose the answer",
+            "\n           ".join(disclosing),
+        )
+    elif problem.actions:
+        report.add(PASS, "leakage: no action returns or names the answer")
+
+    # ---- the tolerance has to discriminate --------------------------------- #
+    # A tolerance wider than the answer's own magnitude accepts values that
+    # share nothing with it. The extreme case ships silently: submit_answer(0)
+    # scores 1.0, and the pass rate then measures the format, not the science.
+    tolerance = golden.get("tolerance") or 0
+    if tolerance:
+        trivial = _zeroed_like(golden["answer"])
+        result = core.compare_answers(trivial, golden)
+        if result["score"] >= 1.0:
+            report.add(
+                FAIL,
+                "tolerance: discriminates a wrong answer",
+                f"tolerance {tolerance} is wide enough that submitting "
+                f"{json.dumps(trivial)} scores 1.0 — the task cannot tell a "
+                "solved rollout from an empty one",
+            )
+        else:
+            report.add(PASS, f"tolerance: {tolerance} rejects a trivial answer")
+
     # ---- fixed instance vs. seeded family ---------------------------------- #
     # A task whose hidden constants are hardcoded grades against the same golden
     # answer in every episode, so a model that has seen it once can submit from
@@ -703,6 +755,46 @@ def _dummy_params(action: dict[str, Any]) -> dict[str, Any]:
         for p in action["params"]
         if p["required"] or "default" in p
     }
+
+
+def _discloses_whole_answer(candidate: Any, answer: Any) -> bool:
+    """Whether `candidate` hands over the entire answer in one go.
+
+    Deliberately not "contains an answer value". For most inverse tasks a single
+    observation *is* one component of the answer — `evaluate(0)` returning b is
+    the first step of the reference task's own intended solution — so flagging
+    components would condemn every well-formed task. What must not exist is an
+    action that ends the task in one call.
+    """
+    if core._jsonable(candidate) == core._jsonable(answer):
+        return True
+    values = answer if isinstance(answer, (list, tuple)) else [answer]
+    if len(values) < 2:
+        return False  # a scalar answer is covered by the equality check above
+    rendered = (
+        candidate
+        if isinstance(candidate, str)
+        else json.dumps(core._jsonable(candidate), sort_keys=True)
+    )
+    return all(_answer_literals_in(rendered, [value]) for value in values)
+
+
+def _zeroed_like(answer: Any) -> Any:
+    """The emptiest answer of the right shape — zeros, or empty strings."""
+    def blank(value: Any) -> Any:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return 0
+        if isinstance(value, str):
+            return ""
+        return value
+
+    if isinstance(answer, (list, tuple)):
+        return [blank(v) for v in answer]
+    if isinstance(answer, dict):
+        return {k: blank(v) for k, v in answer.items()}
+    return blank(answer)
 
 
 def _deliberately_wrong(answer: Any) -> Any:

@@ -98,7 +98,17 @@ ps = sorted(core.discover_problems()); assert ps, 'no problems baked into the im
 RUN chmod -R go-rwx /app \
     && chmod 0700 /var/lib/inverse-tasks \
     && chmod 0755 /workdir \
-    && chown model:model /workdir
+    && chown model:model /workdir \
+    # Key for the grade payload's expected_fingerprint. The fingerprint lets
+    # calibration tell whether two rollouts shared a hidden instance, which is
+    # how a fixed-instance task is caught — but an unkeyed hash of a four-integer
+    # answer is brute-forceable in milliseconds, so in a model-readable payload
+    # it would *be* the answer. Keyed with a secret only root can read, it says
+    # "same instance" without saying which. Generated per build: it never needs
+    # to be stable across images, only within one.
+    && head -c 32 /dev/urandom > /var/lib/inverse-tasks/fingerprint.key \
+    && chmod 0600 /var/lib/inverse-tasks/fingerprint.key \
+    && chown root:root /var/lib/inverse-tasks/fingerprint.key
 
 ENV INVERSE_TASKS_RUNTIME=taiga \
     INVERSE_TASKS_HARDEN_PERMISSIONS=1 \
