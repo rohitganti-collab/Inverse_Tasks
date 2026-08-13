@@ -193,13 +193,28 @@ Only when your oracle or solver imports something beyond the standard library.
 
 ```bash
 docker build --platform linux/amd64 -t inverse-tasks:local .
+
+# Prove it resists the attacks that worked against a shipped image. Exits
+# non-zero if any of them succeeds — do not push a build that fails this.
+docker run --rm -i --platform linux/amd64 inverse-tasks:local \
+  bash -s < tools/verify_container.sh
+
 docker tag inverse-tasks:local \
   us-east1-docker.pkg.dev/<PROJECT>/<REPO>/inverse-tasks:v2
 docker push us-east1-docker.pkg.dev/<PROJECT>/<REPO>/inverse-tasks:v2
 ```
 
-The build runs the engine selftest against the real `mcp` package and fails the
-build rather than letting a broken wiring surface as a mystery at job time.
+The build runs the engine selftest against the real `mcp` package, an MCP
+protocol smoke over stdio, and the validator across every baked-in problem —
+and fails the build rather than letting broken wiring surface as a mystery at
+job time. That gate is not theoretical: it has already caught a Python 3.11
+f-string incompatibility that the authoring machine's 3.14 accepted silently.
+
+`tools/verify_container.sh` is the second gate, and it checks the things the
+build cannot: that as uid 1000 the golden answer and oracle source are
+unreadable, that nothing readable is left anywhere on the filesystem, that the
+grade log carries only a fingerprint, that there is no submission handoff under
+`/tmp`, and that the query budget cannot be reset. See `docs/HARDENING.md`.
 
 3. **Tag immutably.** `:v2`, or a digest. Never reuse a tag like `:dev` or
    `:latest` for a task you have calibrated — a mutable tag means the thing you

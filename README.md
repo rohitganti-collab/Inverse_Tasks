@@ -47,6 +47,8 @@ If those don't pass on a clean clone, stop and report it.
 | **`docs/TAIGA_RUNBOOK.md`** | Idea → running, calibrated task. Every Taiga form field, plus troubleshooting |
 | **`docs/AI_USE_POLICY.md`** | What Claude may and may not write |
 | **`docs/AUTHORING.md`** | The engineering contract: oracle API, `expected.json` fields, custom graders |
+| **`docs/HARDENING.md`** | The threat model: what the runtime enforces, and the five things only the Taiga form can |
+| `tools/verify_container.sh` | Run the known reward-hacking attacks against a built image |
 | `templates/inverse-task/` | Copy-me folder + `INSTRUCTIONS.md` |
 | `templates/forward-task/` | Copy-me folder + `INSTRUCTIONS.md` |
 | `problems/modular-black-box/` | Reference inverse task |
