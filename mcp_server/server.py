@@ -27,6 +27,7 @@ stay out of reach.
 import argparse
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -93,6 +94,39 @@ def _state_path() -> Path:
     return Path(configured or "/tmp/inverse-tasks/session.json")
 
 
+def _own_private_dir(path: Path) -> bool:
+    """Ensure `path` is a directory this process owns and only it can use.
+
+    `mkdir(exist_ok=True)` accepts a directory somebody else created, and
+    chmod-ing afterwards fixes the mode but not the owner — so a pre-created,
+    solver-owned directory at a predictable path would still be accepted, and
+    the attempt state (including `calls_used`) written inside it. Verify
+    ownership explicitly and refuse to write through anything we do not own.
+    """
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = os.lstat(path)
+    except OSError as exc:
+        log(f"WARNING: cannot use state directory {path}: {exc}")
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        log(f"WARNING: state path {path} is not a directory; refusing to use it")
+        return False
+    if info.st_uid != os.geteuid():
+        log(
+            f"WARNING: state directory {path} is owned by uid {info.st_uid}, not "
+            f"{os.geteuid()}; refusing to use it"
+        )
+        return False
+    if info.st_mode & 0o077:
+        try:
+            os.chmod(path, 0o700)
+        except OSError as exc:
+            log(f"WARNING: cannot restrict state directory {path}: {exc}")
+            return False
+    return True
+
+
 def _save_session(session: core.Session) -> bool:
     """Persist the grading-relevant attempt state without the golden answer."""
     payload = {
@@ -104,12 +138,13 @@ def _save_session(session: core.Session) -> bool:
         "submission_raw": session.submission_raw,
         "submission": core._jsonable(session.submission),
         "submitted": session.submitted,
+        "setup_calls": session.setup_calls,
     }
     path = _state_path()
     temporary = path.with_name(f".{path.name}.tmp")
     try:
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(path.parent, 0o700)
+        if not _own_private_dir(path.parent):
+            return False
         temporary.write_text(
             json.dumps(payload, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
@@ -137,6 +172,22 @@ def _restore_session(problem_id: str) -> Optional[core.Session]:
     path = _state_path()
     if not path.is_file():
         return None
+    # Only trust a snapshot we wrote ourselves. `calls_used` is restored from
+    # this file, so a solver-writable copy would be a budget reset.
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        log(f"WARNING: cannot stat attempt state {path}: {exc}")
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        log(f"WARNING: attempt state {path} is not a regular file; ignoring it")
+        return None
+    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        log(
+            f"WARNING: attempt state {path} is uid {info.st_uid} mode "
+            f"{info.st_mode & 0o777:04o} and not exclusively ours; ignoring it"
+        )
+        return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != _STATE_VERSION:
@@ -162,6 +213,7 @@ def _restore_session(problem_id: str) -> Optional[core.Session]:
         session.submission_raw = payload.get("submission_raw")
         session.submission = payload.get("submission")
         session.submitted = bool(payload.get("submitted", False))
+        session.setup_calls = int(payload.get("setup_calls", 1) or 1)
         state.session = session
         log(f"restored attempt state for {problem_id!r} from {path}")
         return session
@@ -191,7 +243,31 @@ def setup_problem(
             "startup_command (--problem-id) or its metadata id so they agree."
         )
 
+    # Re-entry guard. The scaffold hooks are supposed to be harness-only, but
+    # that is Taiga-side configuration we do not control, and a shipped image
+    # has already been observed publishing `grade_problem` to the model. If
+    # `setup_problem` were reachable too, calling it again would hand back a
+    # brand-new Session — resetting `calls_used` to zero and making the query
+    # budget, the whole difficulty mechanism, unlimited. Refuse once an attempt
+    # is genuinely under way. Outside the image this stays permissive so the
+    # selftest and validator can start successive attempts in one process.
+    previous = state.session
+    same_problem = previous is not None and previous.problem.problem_id == problem_id
+    if (
+        same_problem
+        and core.is_taiga_runtime()
+        and (previous.calls_used > 0 or previous.submitted)
+    ):
+        raise ValueError(
+            f"An attempt at {problem_id!r} is already in progress "
+            f"({previous.calls_used} budgeted call(s) used, "
+            f"submitted={previous.submitted}). setup_problem starts a fresh "
+            "attempt and is called once by the harness; refusing to reset a "
+            "live attempt's query budget."
+        )
+
     session = core.load_session(problem_id)
+    session.setup_calls = (previous.setup_calls + 1) if same_problem else 1
     state.session = session
     protected = core.harden_problem_permissions(session.problem.directory)
     log(

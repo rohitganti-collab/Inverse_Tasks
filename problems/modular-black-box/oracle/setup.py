@@ -13,14 +13,38 @@ Modes:
 """
 from __future__ import annotations
 
+import os
+import random
+
+# The authoring instance. golden/expected.json describes exactly this pair, so
+# validation and the build selftest — which run with no seed set — grade against
+# it. Under Taiga, set INVERSE_TASKS_SEED per problem-run and write the matching
+# golden answer at setup time. See docs/AUTHORING.md, "Ship a family".
+_AUTHORING_A, _AUTHORING_B = 23, 58
+
 
 class Oracle:
-    """f(x) = (a * x + b) mod M, with hidden a, b."""
+    """f(x) = (a * x + b) mod M, with hidden a, b.
+
+    Seeded rather than hardcoded. An oracle whose secrets are class constants
+    grades against the same golden answer in every rollout, so a model that has
+    met the task once can submit from memory with no probes at all — which is
+    what a pass rate of 8/8 at zero variance on a task labelled "hard" actually
+    means in practice. Deriving the pair from a seed makes the family
+    re-rollable instead of retirable.
+    """
 
     M = 97
     BUDGET = 6
-    _A = 23
-    _B = 58
+
+    def _instance(self):
+        """(a, b) for this attempt: seeded when asked, authoring pair otherwise."""
+        raw = os.environ.get("INVERSE_TASKS_SEED")
+        if raw is None:
+            return _AUTHORING_A, _AUTHORING_B
+        rng = random.Random(int(raw))
+        # a must be invertible mod M for the pair to be uniquely recoverable.
+        return rng.randrange(1, self.M), rng.randrange(0, self.M)
 
     ACTIONS = [
         {
@@ -60,6 +84,7 @@ class Oracle:
     def __init__(self) -> None:
         # Fresh instance per attempt — budget must not leak across runs.
         self._used = 0
+        self._A, self._B = self._instance()
 
     def query(self, mode: str, **params):
         """Stable probe entry point. MCP `query_oracle` forwards here."""

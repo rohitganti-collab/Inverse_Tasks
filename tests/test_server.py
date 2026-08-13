@@ -56,7 +56,42 @@ class FakeFastMCP:
         self.ran = True
 
 
+def install_pydantic_stub() -> None:
+    """Provide a minimal `pydantic.BaseModel` when the real package is absent.
+
+    `server.py` declares its Grade response model with pydantic. The real
+    package is installed in the image but not necessarily in an authoring
+    checkout — and without this the whole server suite fails at import and is
+    reported as one failed module rather than as missing coverage, which is how
+    it went unrun locally. Defer to the real package whenever it is importable.
+    """
+    if "pydantic" in sys.modules:
+        return
+    try:
+        import pydantic  # noqa: F401
+
+        return
+    except ModuleNotFoundError:
+        pass
+
+    module = types.ModuleType("pydantic")
+
+    class BaseModel:
+        """Enough of the interface for a response model: kwargs in, attrs out."""
+
+        def __init__(self, **kwargs):
+            for name in getattr(type(self), "__annotations__", {}):
+                setattr(self, name, getattr(type(self), name, None))
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    module.BaseModel = BaseModel
+    module.VERSION = "0-stub"
+    sys.modules["pydantic"] = module
+
+
 def install_mcp_stub() -> None:
+    install_pydantic_stub()
     if "mcp.server.fastmcp" in sys.modules:
         return
     pkg = types.ModuleType("mcp")

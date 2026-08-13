@@ -167,6 +167,60 @@ A fresh `Oracle()` is constructed per attempt, so `__init__` state never leaks
 between runs. Seed any randomness (`random.Random(42)`) — Taiga runs the same
 problem many times and needs the environment to be reproducible.
 
+### Ship a family, not an instance
+
+Hardcoding your hidden values is the single easiest way to build a task that
+looks fine and measures nothing:
+
+```python
+class Oracle:            # DON'T
+    _A = 23
+    _B = 58
+```
+
+Every rollout then grades against the same golden answer, so a model that has
+met the task once submits it from memory with no probes at all. In production
+this shows up as a pass rate of 8/8 at zero variance on a task labelled
+*hard* — which reads like a task that is too easy, when it is really a task
+that is the same question every time.
+
+Derive the values from a seed instead, falling back to the authoring instance
+that `golden/expected.json` describes so local validation still works:
+
+```python
+import os, random
+
+_AUTHORING_A, _AUTHORING_B = 23, 58      # what golden/expected.json says
+
+class Oracle:                            # DO
+    M = 97
+
+    def __init__(self):
+        raw = os.environ.get("INVERSE_TASKS_SEED")
+        if raw is None:
+            self._A, self._B = _AUTHORING_A, _AUTHORING_B
+        else:
+            rng = random.Random(int(raw))
+            self._A = rng.randrange(1, self.M)
+            self._B = rng.randrange(0, self.M)
+```
+
+`problems/modular-black-box/oracle/setup.py` is written this way — copy it.
+
+Two consequences worth planning for:
+
+- **The golden answer has to move with the seed.** Whatever selects the instance
+  must also write the matching `golden/expected.json` before grading. Until your
+  pipeline does that, run unseeded: a fixed instance you *know* about beats a
+  seeded one whose golden answer is stale.
+- **Re-roll instead of retire.** When a model generation starts clearing a
+  family, re-seed it harder rather than throwing away the authoring work.
+
+`validate_problem.py` warns when it can prove your oracle cannot vary — private
+class constants, no seed argument, nothing read from the environment. It is a
+warning, not a failure: a fixed instance is legitimate while you are still
+iterating.
+
 ---
 
 ## 3. Write `golden/expected.json`

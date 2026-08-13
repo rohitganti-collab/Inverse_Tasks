@@ -21,7 +21,38 @@ import core  # noqa: E402
 import validate_problem as vp  # noqa: E402
 from test_core import write_problem  # noqa: E402
 
+# A seeded family, which is the shape the validator wants: the hidden values are
+# a function of a per-episode seed, falling back to the authoring instance that
+# golden/expected.json describes when no seed is set. A fixed-constant oracle
+# grades against the same answer in every rollout, so a model that has seen the
+# task once scores 1.0 with no probes — see FIXED_INSTANCE_ORACLE below.
 GOOD_ORACLE = """
+    import os
+    import random
+
+    class Oracle:
+        M = 97
+        BUDGET = 6
+        ACTIONS = [
+            {"name": "evaluate",
+             "description": "Return the output for x.",
+             "params": {"x": {"type": "integer", "required": True}}},
+        ]
+
+        def __init__(self, seed=None):
+            raw = seed if seed is not None else os.environ.get("INVERSE_TASKS_SEED")
+            if raw is None:
+                self._A, self._B = 5, 2      # the authoring instance
+            else:
+                rng = random.Random(int(raw))
+                self._A = rng.randrange(1, self.M)
+                self._B = rng.randrange(0, self.M)
+
+        def evaluate(self, x):
+            return (self._A * x + self._B) % self.M
+"""
+
+FIXED_INSTANCE_ORACLE = """
     class Oracle:
         M = 97
         BUDGET = 6
@@ -98,6 +129,23 @@ class TestHappyPath(ValidatorTestCase):
     def test_exit_code_is_zero_for_a_good_problem(self):
         self.build()
         self.assertEqual(vp.main(["--problems-dir", str(self.root)]), 0)
+
+    def test_a_fixed_instance_oracle_is_flagged(self):
+        """8/8 at 1.0 with zero variance is what this looks like in production."""
+        self.build(oracle_src=FIXED_INSTANCE_ORACLE)
+        report = self.run_validator()
+        self.assertFalse(report.failed, report.render())  # advisory, not blocking
+        self.assertEqual(self.statuses(report, "instance:"), [vp.WARN], report.render())
+
+    def test_the_grade_payload_is_checked_for_the_answer(self):
+        self.build()
+        report = self.run_validator()
+        self.assertEqual(self.statuses(report, "privacy:"), [vp.PASS], report.render())
+
+    def test_observations_are_checked_for_transportability(self):
+        self.build()
+        report = self.run_validator()
+        self.assertEqual(self.statuses(report, "transport:"), [vp.PASS], report.render())
 
 
 class TestCatchesBrokenTasks(ValidatorTestCase):

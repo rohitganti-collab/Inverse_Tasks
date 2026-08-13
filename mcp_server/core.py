@@ -24,12 +24,14 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import inspect
 import json
 import numbers
 import os
 import re
+import stat as stat_module
 import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -197,6 +199,16 @@ def _cache_key(problem_dir: Path) -> str:
     return str(problem_dir.resolve())
 
 
+def is_taiga_runtime() -> bool:
+    """True inside the published image, where a real model is on the other end.
+
+    The image sets `INVERSE_TASKS_RUNTIME=taiga`. Authoring checkouts and the
+    build-time selftest do not, which is what keeps the hardening and
+    anti-tamper paths from mutating a developer's working tree.
+    """
+    return os.environ.get("INVERSE_TASKS_RUNTIME", "").strip().lower() == "taiga"
+
+
 def permission_hardening_enabled() -> bool:
     """Whether setup should make a problem tree private to its owner.
 
@@ -204,7 +216,7 @@ def permission_hardening_enabled() -> bool:
     selftest against an authoring checkout must never mutate that checkout,
     even if a stale environment variable happens to be present.
     """
-    if os.environ.get("INVERSE_TASKS_RUNTIME", "").strip().lower() != "taiga":
+    if not is_taiga_runtime():
         return False
     return os.environ.get("INVERSE_TASKS_HARDEN_PERMISSIONS", "1").strip().lower() not in {
         "0",
@@ -214,6 +226,21 @@ def permission_hardening_enabled() -> bool:
     }
 
 
+# Subtrees a problem publishes to the model on purpose. A forward task hands
+# over its inputs by design — locking these away would make the task unsolvable
+# rather than secure. Everything outside them (oracle/, golden/, grader/,
+# problem.md) stays owner-only.
+PUBLIC_SUBTREES = ("simulation",)
+
+
+def _is_public_path(problem_dir: Path, path: Path) -> bool:
+    """True for files a forward task is supposed to hand the model."""
+    if path == problem_dir:
+        return False
+    head = path.relative_to(problem_dir).parts[0]
+    return head in PUBLIC_SUBTREES
+
+
 def harden_problem_permissions(problem_dir: Path) -> list[str]:
     """Make a problem tree readable only by its owner, without changing data.
 
@@ -221,6 +248,14 @@ def harden_problem_permissions(problem_dir: Path) -> list[str]:
     1000. Owner-only modes therefore keep oracle, golden, and grader data away
     from bash/editor tools while still allowing a newly started MCP process to
     reload everything before grading.
+
+    `simulation/` is the deliberate exception: a forward task's whole premise is
+    that the model gets those inputs and runs the tool itself, so that subtree
+    is published world-readable while staying root-*owned* — readable, not
+    editable, so a solver cannot rewrite its own inputs. The problem directory
+    itself then becomes traversable-but-not-listable (0711), which lets the
+    model open `simulation/...` by its documented name without being able to
+    enumerate what else sits beside it.
 
     Refusing to overwrite or unlink task files is important: Taiga is allowed
     to restart the MCP process between setup and grade, and process-local
@@ -232,6 +267,8 @@ def harden_problem_permissions(problem_dir: Path) -> list[str]:
     problem_dir = problem_dir.resolve()
     if not problem_dir.is_dir():
         raise InverseTaskError(f"Cannot protect missing problem directory {problem_dir}")
+
+    has_public = any((problem_dir / name).is_dir() for name in PUBLIC_SUBTREES)
 
     protected: list[str] = []
     failures: list[str] = []
@@ -245,10 +282,15 @@ def harden_problem_permissions(problem_dir: Path) -> list[str]:
             stat = path.stat()
             if os.geteuid() == 0 and (stat.st_uid != 0 or stat.st_gid != 0):
                 os.chown(path, 0, 0)
+            public = _is_public_path(problem_dir, path)
             if path.is_dir():
-                desired_mode = 0o700
+                if path == problem_dir:
+                    # o+x only when something inside is meant to be reachable.
+                    desired_mode = 0o711 if has_public else 0o700
+                else:
+                    desired_mode = 0o755 if public else 0o700
             elif path.is_file():
-                desired_mode = 0o600
+                desired_mode = 0o644 if public else 0o600
             else:
                 continue
             if stat.st_mode & 0o777 != desired_mode:
@@ -752,6 +794,10 @@ class Session:
         self.submission_raw: Optional[str] = None
         self.submission: Any = None
         self.submitted = False
+        # How many times setup_problem has run against this attempt. The harness
+        # calls it once; anything higher means something re-entered the scaffold
+        # hook, which is recorded in the grade so calibration can see it.
+        self.setup_calls = 0
 
     # -- introspection ---------------------------------------------------- #
 
@@ -920,11 +966,17 @@ class Session:
             return {
                 "subscores": {"correct": 0.0},
                 "weights": {"correct": 1.0},
-                "metadata": {
-                    "reason": "no answer submitted",
-                    "budget_used": self.calls_used,
-                    "call_log": self.call_log,
-                },
+                "metadata": _scrub_metadata(
+                    {
+                        "reason": "no answer submitted",
+                        "problem_id": self.problem.problem_id,
+                        "budget_total": self.problem.budget_total,
+                        "budget_used": self.calls_used,
+                        "expected_fingerprint": answer_fingerprint(golden["answer"]),
+                        "setup_calls": self.setup_calls,
+                        "call_log": self.call_log,
+                    }
+                ),
             }
 
         return _normalise_grade(
@@ -1101,6 +1153,66 @@ def _load_custom_grader(problem_dir: Path) -> Optional[Callable]:
     return call
 
 
+def grade_discloses_expected() -> bool:
+    """Whether grade metadata may echo the golden answer. Never on Taiga.
+
+    Taiga persists the grade payload into run logs that model-side tools can
+    read — `/workdir/app.log` is world-readable while solver tools run as uid
+    1000 — so echoing the answer there turns any reachable grader into an answer
+    oracle: submit a throwaway, call the grader, read the log, resubmit the
+    value it printed. That loop was demonstrated end-to-end against a shipped
+    image, so the answer must not enter the payload in the first place: we
+    cannot control who can call `grade_problem`, or where Taiga writes what it
+    returns, but we can control what we put in it.
+
+    Local authoring keeps the disclosure — the author already owns
+    `golden/expected.json`, and the validator compares against it.
+    """
+    if is_taiga_runtime():
+        return False
+    return os.environ.get("INVERSE_TASKS_DISCLOSE_EXPECTED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def answer_fingerprint(answer: Any) -> str:
+    """Stable, non-invertible digest of a golden answer.
+
+    Calibration needs to know whether two rollouts were graded against the same
+    hidden instance — that is exactly how a task with hardcoded constants is
+    caught. A digest answers that without putting the value in the payload.
+    """
+    canonical = json.dumps(_jsonable(answer), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _redact_details(details: Any) -> Any:
+    """Drop golden values from per-element comparison details.
+
+    `match` and the model's own `submitted` value stay: they say where the
+    answer went wrong without saying what it should have been.
+    """
+    if not isinstance(details, list):
+        return details
+    return [
+        {k: v for k, v in item.items() if k != "expected"} if isinstance(item, dict) else item
+        for item in details
+    ]
+
+
+def _scrub_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Remove golden values a custom grader may have added to its metadata."""
+    if grade_discloses_expected():
+        return metadata
+    scrubbed = {k: v for k, v in metadata.items() if k != "expected"}
+    if "details" in scrubbed:
+        scrubbed["details"] = _redact_details(scrubbed["details"])
+    return scrubbed
+
+
 def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") -> dict[str, Any]:
     """Coerce a comparison/custom-grader result into Taiga's Grade shape."""
     base_metadata = {
@@ -1109,9 +1221,13 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
         "budget_used": session.calls_used,
         "submitted_raw": session.submission_raw,
         "submitted": session.submission,
-        "expected": golden["answer"],
+        # Never the answer itself — see grade_discloses_expected().
+        "expected_fingerprint": answer_fingerprint(golden["answer"]),
+        "setup_calls": session.setup_calls,
         "call_log": session.call_log,
     }
+    if grade_discloses_expected():
+        base_metadata["expected"] = golden["answer"]
 
     if isinstance(result, numbers.Real) and not isinstance(result, bool):
         score = _clamp(float(result))
@@ -1132,7 +1248,7 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
         if not grade["weights"]:
             n = len(grade["subscores"]) or 1
             grade["weights"] = {k: 1.0 / n for k in grade["subscores"]}
-        grade["metadata"] = {**base_metadata, **(result.get("metadata") or {})}
+        grade["metadata"] = _scrub_metadata({**base_metadata, **(result.get("metadata") or {})})
         for passthrough in (
             "env_internal_failure",
             "env_internal_failure_logs",
@@ -1161,15 +1277,17 @@ def _normalise_grade(result: Any, golden: dict[str, Any], session: "Session") ->
         return grade
 
     score = _clamp(float(result.get("score", 0.0)))
-    metadata = {
-        **base_metadata,
-        "correct": result.get("correct"),
-        "matches": result.get("matches"),
-        "total": result.get("total"),
-        "details": result.get("details"),
-        "scoring": result.get("scoring"),
-        "tolerance": result.get("tolerance", golden.get("tolerance", 0)),
-    }
+    metadata = _scrub_metadata(
+        {
+            **base_metadata,
+            "correct": result.get("correct"),
+            "matches": result.get("matches"),
+            "total": result.get("total"),
+            "details": result.get("details"),
+            "scoring": result.get("scoring"),
+            "tolerance": result.get("tolerance", golden.get("tolerance", 0)),
+        }
+    )
     return {
         "subscores": {"correct": score},
         "weights": {"correct": 1.0},

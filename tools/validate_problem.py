@@ -32,8 +32,10 @@ things a human should look at (e.g. a hint that may give away the method).
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -272,6 +274,38 @@ def validate(problem_id: str, directory: Path, roots) -> Report:
     elif problem.actions:
         report.add(PASS, "contract: every declared action reaches the oracle")
 
+    # ---- observations survive the MCP boundary ----------------------------- #
+    # A shipped image once declared the probe tool as `-> str | int | dict`.
+    # FastMCP builds its output schema from that annotation, so an oracle
+    # returning a float failed validation on *every* reading and the value
+    # reached the model only inside an error string. Runs still scored 1.0
+    # because the models parsed the number out of the error text, so nothing
+    # looked broken. Check the values an oracle actually produces can be
+    # rendered and read back unchanged.
+    untransportable = []
+    for action in problem.actions:
+        probe = core.load_session(problem_id, roots)
+        try:
+            observation = probe.query(action["name"], _dummy_params(action))
+        except core.InverseTaskError:
+            continue  # already reported above, or a legitimate domain error
+        try:
+            rendered = json.dumps(core._jsonable(observation))
+            if json.loads(rendered) != core._jsonable(observation):
+                raise ValueError("value changed on round trip")
+        except (TypeError, ValueError) as exc:
+            untransportable.append(
+                f"{action['name']} returned {type(observation).__name__}: {exc}"
+            )
+    if untransportable:
+        report.add(
+            FAIL,
+            "transport: observations survive the MCP boundary",
+            "\n           ".join(untransportable),
+        )
+    elif problem.actions:
+        report.add(PASS, "transport: observations round-trip unchanged")
+
     # ---- golden ----------------------------------------------------------- #
     try:
         golden = problem.golden()
@@ -297,6 +331,61 @@ def validate(problem_id: str, directory: Path, roots) -> Report:
                 "golden: keys align with answer",
                 f"{len(golden['keys'])} key(s) for {len(golden['answer'])} answer element(s)",
             )
+
+    # ---- the grade payload must not carry the answer ----------------------- #
+    # Taiga writes grade output to /workdir/app.log, which is world-readable
+    # while solver tools run as uid 1000. If the payload contains the golden
+    # answer and `grade_problem` is reachable, the task is a four-step exploit:
+    # submit a throwaway, grade, read the log, resubmit. Grade a deliberately
+    # wrong answer under the image's runtime and confirm nothing golden appears.
+    previous_runtime = os.environ.get("INVERSE_TASKS_RUNTIME")
+    os.environ["INVERSE_TASKS_RUNTIME"] = "taiga"
+    try:
+        privacy_probe = core.load_session(problem_id, roots)
+        privacy_probe.submit(_deliberately_wrong(golden["answer"]))
+        payload = json.dumps(core._jsonable(privacy_probe.grade()), sort_keys=True)
+    except core.InverseTaskError as exc:
+        report.add(WARN, "privacy: could not grade a probe answer", str(exc))
+        payload = ""
+    finally:
+        if previous_runtime is None:
+            os.environ.pop("INVERSE_TASKS_RUNTIME", None)
+        else:
+            os.environ["INVERSE_TASKS_RUNTIME"] = previous_runtime
+
+    if payload:
+        leaked = _answer_literals_in(payload, golden["answer"])
+        if '"expected"' in payload or leaked:
+            # Built outside the f-string: the image runs Python 3.11, where a
+            # backslash inside an f-string expression is a syntax error.
+            where = ", ".join(leaked) if leaked else 'under an "expected" key'
+            report.add(
+                FAIL,
+                "privacy: grade payload hides the answer",
+                f"golden value(s) {where} appear in the grade metadata, which "
+                "Taiga logs where the model can read it",
+            )
+        else:
+            report.add(PASS, "privacy: grade payload carries no golden values")
+
+    # ---- fixed instance vs. seeded family ---------------------------------- #
+    # A task whose hidden constants are hardcoded grades against the same golden
+    # answer in every episode, so a model that has seen it once can submit from
+    # memory with zero probes. That is what an 8/8, zero-variance pass rate on a
+    # task labelled "hard" actually means.
+    if not _oracle_varies_per_episode(directory):
+        report.add(
+            WARN,
+            "instance: hidden values look fixed across episodes",
+            "oracle/setup.py takes no seed/instance argument and reads no "
+            "environment, so every rollout has the same answer "
+            f"(fingerprint {core.answer_fingerprint(golden['answer'])}). A model "
+            "that has seen this task can score 1.0 without querying. Consider a "
+            "seeded family: draw the hidden values per episode and write the "
+            "matching golden/expected.json at setup time.",
+        )
+    else:
+        report.add(PASS, "instance: oracle can vary per episode")
 
     # ---- intended solver -------------------------------------------------- #
     intended = _load_solver(directory / "solution" / "main.py")
@@ -614,6 +703,110 @@ def _dummy_params(action: dict[str, Any]) -> dict[str, Any]:
         for p in action["params"]
         if p["required"] or "default" in p
     }
+
+
+def _deliberately_wrong(answer: Any) -> Any:
+    """An answer shaped like the golden one but certainly not equal to it.
+
+    Used to grade a probe submission without accidentally scoring 1.0, so the
+    privacy check exercises the same code path a failing rollout takes — which
+    is the path that leaked, since Taiga logs the payload on failures too.
+    """
+    def nudge(value: Any) -> Any:
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, (int, float)):
+            return value + 12345.6789
+        if isinstance(value, str):
+            return value + "-wrong"
+        return value
+
+    if isinstance(answer, (list, tuple)):
+        return [nudge(v) for v in answer]
+    if isinstance(answer, dict):
+        return {k: nudge(v) for k, v in answer.items()}
+    return nudge(answer)
+
+
+# Names whose presence in __init__ means the hidden values can differ per run.
+_VARIABILITY_NAMES = frozenset(
+    {
+        "random",
+        "randrange",
+        "randint",
+        "uniform",
+        "choice",
+        "sample",
+        "shuffle",
+        "seed",
+        "default_rng",
+        "environ",
+        "getenv",
+        "uuid",
+        "uuid4",
+        "urandom",
+        "token_hex",
+    }
+)
+
+
+def _oracle_varies_per_episode(directory: Path) -> bool:
+    """Whether the oracle's hidden values can differ between rollouts.
+
+    Read from the syntax tree rather than by grepping the text: an early
+    substring version of this check passed `modular-black-box` — whose secrets
+    are the class constants `_A = 23` / `_B = 58` — purely because the word
+    "instance" appeared in a comment. Comments cannot reseed an oracle.
+
+    The task is fixed when it has private class-level constants for its secrets,
+    `__init__` takes nothing that could select an instance, and nothing in the
+    constructor touches randomness or the environment. Anything less certain
+    returns True, so this warns only where it is sure.
+    """
+    source_path = directory / "oracle" / "setup.py"
+    if not source_path.is_file():
+        return True
+    try:
+        tree = ast.parse(source_path.read_text())
+    except (OSError, SyntaxError):  # pragma: no cover - defensive
+        return True
+
+    oracle = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "Oracle"),
+        None,
+    )
+    if oracle is None:
+        return True  # module-level oracle; not enough structure to judge
+
+    literal_secrets: list[str] = []
+    dynamic = False
+
+    for node in oracle.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.startswith("_"):
+                    if isinstance(node.value, ast.Constant):
+                        literal_secrets.append(target.id)
+                    else:
+                        dynamic = True
+        elif isinstance(node, ast.FunctionDef) and node.name == "__init__":
+            takes_selector = (
+                [a for a in node.args.args if a.arg != "self"]
+                or node.args.kwonlyargs
+                or node.args.vararg is not None
+                or node.args.kwarg is not None
+            )
+            if takes_selector:
+                return True
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Attribute) and sub.attr in _VARIABILITY_NAMES:
+                    dynamic = True
+                elif isinstance(sub, ast.Name) and sub.id in _VARIABILITY_NAMES:
+                    dynamic = True
+
+    if dynamic:
+        return True
+    return not literal_secrets
 
 
 def _answer_literals_in(text: str, answer: Any) -> list[str]:
