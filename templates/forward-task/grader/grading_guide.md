@@ -1,16 +1,15 @@
-# Grading guide — <title>
+# Grading guide — Gravitationally coupled coherent states
 
 <!-- YOU own this file. Per the AI Use Policy, Claude must not write it.
      DOES NOT SHIP to Taiga — it names the trap outright. Upload it only as a
      Supporting File, for human review. -->
 
-**Golden answer:** <the answer, in the shape golden/expected.json uses>
+**Golden answer:** 0.84
 
-**Verified by:** <literature reference / analytical limit / independent setup —
-not "my own converged run">
+**Verified by:** arXiv:2410.21009 eq. (12d)
 
-**Graded:** element-wise, in order — order is part of the answer.
-**Tolerance:** <N> — absolute, per numeric element. `0` means exact.
+**Graded:** single number
+**Tolerance:** 0.01
 **Scoring:** `binary`
 
 <!-- Keep scoring binary unless you really mean otherwise: "partial" awards the
@@ -23,10 +22,10 @@ not "my own converged run">
 
 | | Value |
 |---|---|
-| Correct answer | `<value>` |
-| Naive default produces | `<value>` |
-| Separation | `<value>` |
-| Tolerance (inside the separation) | `<N>` |
+| Correct answer | `0.84` |
+| Naive default produces | `0.79` |
+| Separation | `0.05` |
+| Tolerance (inside the separation) | `0.01` |
 
 ## Near-miss table
 
@@ -35,11 +34,8 @@ not "my own converged run">
 
 | Candidate answer | Looks right because | Why it loses |
 |---|---|---|
-| `<correct>` | — | — (this is the answer) |
-| `<default-resolution-result>` **(TRAP)** | One clean run, no warnings, plausible magnitude | Unconverged — the result is still moving at that resolution |
-| `<wrong-method-result>` | The solver ran and reported a steady value | Steady-state treatment where the physics is unsteady |
-| `<wrong-convention-result>` | Numerically defensible under a different convention | The stated convention is <...> |
-| `<instantaneous-not-averaged>` | A single reading from a valid run | The quantity asked for is a time-average |
+| `0.84` | — | — (this is the answer) |
+| `0.79` **(TRAP)** | Typical textbook treatment using rotating-wave approximation, no signal that points to an incorrect answer | The RWA is valid for $\omega_g/\omega \ll 1$ but here we have $omega_g/\omega \approx 1/3$ close to unity |
 
 ## Edge cases the judge should know
 

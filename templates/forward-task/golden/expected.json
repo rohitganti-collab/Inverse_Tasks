@@ -1,5 +1,5 @@
 {
-  "answer": [42.0],
+  "answer": [0.84],
   "tolerance": 0.01,
   "keys": ["quantity"],
   "scoring": "binary"

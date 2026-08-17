@@ -33,16 +33,18 @@ accepted/rejected, never close-enough, never a hint. No `check_*` or
 Dependencies: standard library only unless the image already carries the package.
 """
 
+import math
+import numpy as np
 
 class Oracle:
     """<one line: what the hidden system is, without giving away the answer>"""
 
     # Budgeted calls allowed. The engine enforces this. Absent or None =
     # unlimited, which almost always makes an inverse task too easy.
-    BUDGET = 6
+    BUDGET = 4
 
     # --- hidden ground truth: `_` prefix makes it unreachable -------------- #
-    _SECRET = 42
+    _SECRET = 5.00
 
     # --- public constants: safe for the model, state them in problem.md ---- #
     # M = 97
@@ -105,23 +107,44 @@ class Oracle:
         self._used = 0
 
     # ------------------------------------------------------------- actions #
-    def evaluate(self, x: int):
+    def evaluate(self, t: float):
         """Replace with your forward map. Return an observation, never the secret."""
         self._used += 1
-        return (int(x) + self._SECRET) % 100
 
-    def coarse_reading(self, x: int):
+        m = self._SECRET * 1e-9 # kg  -- the secret parameter to be found
+
+        # given:
+        omega = 1   # s^-1
+        d = 1.0e-6 # m
+        G = 6.6743e-11 # m^3 kg^-1 s^-2
+        hbar = 6.62607e-34 # m^2 kg s^-1
+
+        # prefactor sqrt(2 hbar/(m omega)) * alpha remains unknown:
+        pre = 3.0
+
+        delta = G * m / d**3 / omega**2
+        omega_minus = omega * math.sqrt(1-2*delta)
+
+        answer = pre * math.cos(omega_minus * t)
+
+        return answer
+
+    def coarse_reading(self, t: float):
         """Replace with a genuinely different, lossier view of the system."""
         self._used += 1
-        return ((int(x) + self._SECRET) % 100) // 10 * 10
+        max_error = 0.1
+        n = 10
+        errors = 2 * max_error * np.random.random_sample(n) - max_error
+        vals = [self.evaluate(t+dt) for dt in errors]
+        return sum(vals) / len(vals)
 
     def help(self, question: str = ""):
         """List modes and budget. Recommend nothing; explain no physics."""
         return {
-            "description": "<one neutral line: what kind of system this is>",
+            "description": "Expectation value for first oscillator position at given time t",
             "modes": {
-                "evaluate": "{x: integer} -> integer",
-                "coarse_reading": "{x: integer} -> integer",
+                "evaluate": "{t: float} -> float",
+                "coarse_reading": "{t: float} -> float",
                 "help": "{} -> {description, modes, budget_remaining}",
             },
             "budget_remaining": self.BUDGET - self._used,

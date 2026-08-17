@@ -1,13 +1,13 @@
-# Grading guide — <title>
+# Grading guide — Gravitationally coupled coherent states
 
 <!-- YOU own this file. Per the AI Use Policy, Claude must not write it.
      DOES NOT SHIP to Taiga — it names the trap outright. Upload it only as a
      Supporting File, for human review. -->
 
-**Golden answer:** <the answer, in the shape golden/expected.json uses>
+**Golden answer:** 5.00
 
-**Graded:** element-wise, in order — order is part of the answer.
-**Tolerance:** <N> — absolute, per numeric element. `0` means exact.
+**Graded:** single number
+**Tolerance:** 0.01
 **Scoring:** `binary`
 
 <!-- Keep scoring binary unless you really mean otherwise. With "partial", a
@@ -19,7 +19,7 @@
      the nearest near-miss below. If the near-miss falls inside tolerance, the
      wrong answer passes and the task is broken. State that distance here. -->
 
-Distance to nearest near-miss: <value> — tolerance is set inside this.
+Distance to nearest near-miss: 1.34 — tolerance is set inside this.
 
 ## Near-miss table
 
@@ -30,11 +30,8 @@ Distance to nearest near-miss: <value> — tolerance is set inside this.
 
 | Candidate answer | Looks right because | Why it loses |
 |---|---|---|
-| `<correct>` | — | — (this is the answer) |
-| `<near-miss-1>` **(TRAP)** | <why it is tempting> | <what it fails to account for> |
-| `<near-miss-2>` | <why it is tempting> | <why it loses> |
-| `<incomplete>` | <e.g. one component is easy to read off> | Incomplete — the task asks for all components |
-| `<reordered>` | All the numbers are present | Order matters; the specified order is <...> |
+| `5.00` | — | — (this is the answer) |
+| `6.34` **(TRAP)** | applies rotating-wave approximation | RWA is not valid for given parameters |
 
 ## Edge cases the judge should know
 

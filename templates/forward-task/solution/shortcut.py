@@ -23,6 +23,7 @@ Common forward traps:
   * An instantaneous value where a time-average was required
 """
 
+import math
 
 def solve():
     """The default path. Must land on the named near-miss.
@@ -30,13 +31,18 @@ def solve():
     Returns:
         The near-miss answer — right shape, wrong value.
     """
-    # One run at the defaults. No second run, no convergence check.
-    # REPLACE with the default path for your system.
-    from main import run_case
+    t = 1 # s
+    omega = 1   # s^-1
+    m = 5.00e-9 # kg
+    d = 1.0e-6 # m
+    G = 6.6743e-11 # m^3 kg^-1 s^-2
 
-    result = run_case()
+    delta = G * m / d**3 / omega**2
+    omega_minus = omega * (1-delta)  # rotating-wave approximation (invalid)
 
-    return [result]  # TODO: the near-miss your task produces
+    answer = math.cos(omega_minus * t)
+
+    return answer
 
 
 if __name__ == "__main__":
