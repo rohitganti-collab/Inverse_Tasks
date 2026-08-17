@@ -1,0 +1,14 @@
+# BRIEF — <title>
+
+<!-- One paragraph, in your own words, of what this task investigates. Written
+     for a colleague, not for the model. Plain language — if you can't explain
+     the investigation without jargon, the setup may not be clean yet. -->
+
+> <What is the hidden system? What must the solver recover? Why is the
+> investigation interesting — what makes it possible to get wrong in a
+> specific, predictable way?>
+
+**Direction:** Inverse
+**Domain:**
+**Tool / forward computation being wrapped:**
+**Source paper (if any):**

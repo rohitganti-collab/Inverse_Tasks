@@ -1,0 +1,40 @@
+# Grading guide — Gravitationally coupled coherent states
+
+<!-- YOU own this file. Per the AI Use Policy, Claude must not write it.
+     DOES NOT SHIP to Taiga — it names the trap outright. Upload it only as a
+     Supporting File, for human review. -->
+
+**Golden answer:** 5.00
+
+**Graded:** single number
+**Tolerance:** 0.01
+**Scoring:** `binary`
+
+<!-- Keep scoring binary unless you really mean otherwise. With "partial", a
+     solver who recovers one of two constants earns 0.5 — which rewards exactly
+     the incomplete near-miss most tasks are designed to reject. -->
+
+
+<!-- The tolerance must be TIGHTER than the distance from the correct answer to
+     the nearest near-miss below. If the near-miss falls inside tolerance, the
+     wrong answer passes and the task is broken. State that distance here. -->
+
+Distance to nearest near-miss: 1.34 — tolerance is set inside this.
+
+## Near-miss table
+
+<!-- One row per wrong answer a competent colleague might produce. Every row
+     needs a reason it loses. At least one must look structurally correct.
+     The row marked TRAP is the one shortcut.py produces and the one ≥60% of
+     failures should land on. -->
+
+| Candidate answer | Looks right because | Why it loses |
+|---|---|---|
+| `5.00` | — | — (this is the answer) |
+| `6.34` **(TRAP)** | applies rotating-wave approximation | RWA is not valid for given parameters |
+
+## Edge cases the judge should know
+
+<!-- e.g. "Accept the value inside a JSON wrapper iff it is unambiguous. Reject
+     a range or multiple candidates. Reject a correct value in the wrong
+     position." -->
