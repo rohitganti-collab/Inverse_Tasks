@@ -381,7 +381,7 @@ def describe_oracle() -> str:
 
 
 @mcp.tool()
-def submit_answer(answer: Any) -> str:
+def submit_answer(answer: dict | list | str | float | bool) -> str:
     """Submit your final answer as a JSON value.
 
     Call `describe_oracle` to see the expected shape. Arrays, objects, numbers,
